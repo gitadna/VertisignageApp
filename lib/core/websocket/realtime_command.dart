@@ -185,7 +185,6 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final aid = payload['announcementId'] as String?;
         if (aid == null || aid.isEmpty) return null;
         final title = (payload['title'] as String?)?.trim();
-        // ignore: unused_local_variable — wire field kept for future body UI.
         final bodyRaw = (payload['body'] as String?)?.trim();
         final ds = payload['durationSec'];
         final durationSec = ds is num ? ds.round() : 15;
