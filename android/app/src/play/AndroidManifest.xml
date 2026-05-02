@@ -1,0 +1,3 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Play-track builds: no REQUEST_INSTALL_PACKAGES (OTA handled via store). -->
+</manifest>

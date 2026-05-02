@@ -1,43 +1,53 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+
+/// Maps playlist `fitMode` strings to [BoxFit] (aligned with admin CMS).
+BoxFit boxFitFromPlaylistMode(String mode) {
+  switch (mode.toLowerCase()) {
+    case 'fit':
+      return BoxFit.contain;
+    case 'stretch':
+      return BoxFit.fill;
+    case 'fill':
+    default:
+      return BoxFit.cover;
+  }
+}
 
 /// Cached image slide (local file path).
 class ImageSlideLayer extends StatelessWidget {
   const ImageSlideLayer({
     super.key,
     required this.path,
+    required this.fit,
     required this.onDecodeFailed,
   });
 
   final String path;
+  final BoxFit fit;
   final VoidCallback onDecodeFailed;
 
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
       color: Colors.black,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return Center(
-            child: Image.file(
-              File(path),
-              fit: BoxFit.contain,
-              width: constraints.maxWidth,
-              height: constraints.maxHeight,
-              gaplessPlayback: true,
-              errorBuilder: (context, error, stackTrace) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  onDecodeFailed();
-                });
-                return const SizedBox.shrink();
-              },
-            ),
-          );
-        },
+      child: SizedBox.expand(
+        child: Image.file(
+          File(path),
+          fit: fit,
+          gaplessPlayback: true,
+          errorBuilder: (context, error, stackTrace) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              onDecodeFailed();
+            });
+            return const SizedBox.shrink();
+          },
+        ),
       ),
     );
   }
@@ -48,15 +58,21 @@ class VideoSlideLayer extends StatefulWidget {
   const VideoSlideLayer({
     super.key,
     required this.path,
+    required this.fit,
     required this.muted,
     required this.generation,
     required this.onEnded,
+    this.playbackPaused,
   });
 
   final String path;
+  final BoxFit fit;
   final bool muted;
   final int generation;
   final Future<void> Function(int generation, {bool hadError}) onEnded;
+
+  /// When true, the decoder should stay paused (kiosk manual pause).
+  final ValueListenable<bool>? playbackPaused;
 
   @override
   State<VideoSlideLayer> createState() => _VideoSlideLayerState();
@@ -66,12 +82,61 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
     with WidgetsBindingObserver {
   VideoPlayerController? _controller;
   bool _notified = false;
+  VoidCallback? _pausedListener;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _attachPausedListener();
     unawaited(_init());
+  }
+
+  @override
+  void didUpdateWidget(VideoSlideLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playbackPaused != widget.playbackPaused) {
+      final oldL = oldWidget.playbackPaused;
+      final fn = _pausedListener;
+      if (oldL != null && fn != null) {
+        oldL.removeListener(fn);
+      }
+      _pausedListener = null;
+      _attachPausedListener();
+      _applyPausedFromNotifier();
+    }
+  }
+
+  void _attachPausedListener() {
+    final listenable = widget.playbackPaused;
+    if (listenable == null) return;
+    void listener() {
+      if (!mounted) return;
+      _applyPausedFromNotifier();
+    }
+
+    _pausedListener = listener;
+    listenable.addListener(listener);
+  }
+
+  void _detachPausedListener() {
+    final listenable = widget.playbackPaused;
+    final fn = _pausedListener;
+    if (listenable != null && fn != null) {
+      listenable.removeListener(fn);
+    }
+    _pausedListener = null;
+  }
+
+  void _applyPausedFromNotifier() {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized || _notified) return;
+    final paused = widget.playbackPaused?.value ?? false;
+    if (paused) {
+      unawaited(c.pause());
+    } else {
+      unawaited(c.play());
+    }
   }
 
   @override
@@ -79,7 +144,9 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
     final c = _controller;
     if (c == null || !c.value.isInitialized || _notified) return;
     if (state == AppLifecycleState.resumed) {
-      unawaited(c.play());
+      if (!(widget.playbackPaused?.value ?? false)) {
+        unawaited(c.play());
+      }
     } else {
       unawaited(c.pause());
     }
@@ -99,6 +166,7 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
       c.addListener(_onTick);
       setState(() {});
       await c.play();
+      _applyPausedFromNotifier();
     } catch (_) {
       await c.dispose();
       if (!mounted || _notified) return;
@@ -135,6 +203,7 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _detachPausedListener();
     final c = _controller;
     if (c != null) {
       c.removeListener(_onTick);
@@ -149,15 +218,53 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
     if (c == null || !c.value.isInitialized) {
       return const ColoredBox(color: Colors.black);
     }
+    final size = c.value.size;
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) {
+      return const ColoredBox(color: Colors.black);
+    }
+    final ar = w / h;
+
+    Widget core() => VideoPlayer(c);
+
+    final Widget framed;
+    if (widget.fit == BoxFit.contain) {
+      framed = Center(
+        child: AspectRatio(
+          aspectRatio: ar == 0 ? 16 / 9 : ar,
+          child: core(),
+        ),
+      );
+    } else if (widget.fit == BoxFit.cover) {
+      framed = ClipRect(
+        child: SizedBox.expand(
+          child: FittedBox(
+            fit: BoxFit.cover,
+            alignment: Alignment.center,
+            child: SizedBox(width: w, height: h, child: core()),
+          ),
+        ),
+      );
+    } else if (widget.fit == BoxFit.fill) {
+      framed = SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.fill,
+          child: SizedBox(width: w, height: h, child: core()),
+        ),
+      );
+    } else {
+      framed = Center(
+        child: AspectRatio(
+          aspectRatio: ar == 0 ? 16 / 9 : ar,
+          child: core(),
+        ),
+      );
+    }
+
     return ColoredBox(
       color: Colors.black,
-      child: Center(
-        child: AspectRatio(
-          aspectRatio:
-              c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
-          child: VideoPlayer(c),
-        ),
-      ),
+      child: framed,
     );
   }
 }

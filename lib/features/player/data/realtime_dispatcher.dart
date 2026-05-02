@@ -10,12 +10,14 @@ import '../../../core/websocket/realtime_client.dart';
 import '../../../core/websocket/realtime_command.dart';
 import '../../../services/device_service.dart';
 import '../../../services/token_store.dart';
+import 'announcement_overlay_notifier.dart';
 import 'emergency_overlay_notifier.dart';
 import 'kiosk_fleet_api.dart';
 import 'media_cache_service.dart';
 import 'ota_update_service.dart';
 import 'player_telemetry.dart';
 import 'playlist_sync_service.dart';
+import '../presentation/player_controller.dart';
 
 /// Subscribes to [RealtimeClient.messages] once and routes typed commands (non-blocking).
 class RealtimeDispatcher {
@@ -23,6 +25,8 @@ class RealtimeDispatcher {
     required RealtimeClient realtime,
     required PlaylistSyncService playlistSync,
     required EmergencyOverlayNotifier emergencyOverlay,
+    required AnnouncementOverlayNotifier announcementOverlay,
+    required PlayerController player,
     required TokenStore tokenStore,
     required DeviceService device,
     required KioskFleetApi fleetApi,
@@ -32,6 +36,8 @@ class RealtimeDispatcher {
   })  : _realtime = realtime,
         _playlistSync = playlistSync,
         _emergencyOverlay = emergencyOverlay,
+        _announcementOverlay = announcementOverlay,
+        _player = player,
         _tokenStore = tokenStore,
         _device = device,
         _fleetApi = fleetApi,
@@ -42,6 +48,8 @@ class RealtimeDispatcher {
   final RealtimeClient _realtime;
   final PlaylistSyncService _playlistSync;
   final EmergencyOverlayNotifier _emergencyOverlay;
+  final AnnouncementOverlayNotifier _announcementOverlay;
+  final PlayerController _player;
   final TokenStore _tokenStore;
   final DeviceService _device;
   final KioskFleetApi _fleetApi;
@@ -50,7 +58,10 @@ class RealtimeDispatcher {
   final PlayerTelemetry _telemetry;
 
   final LinkedHashSet<String> _recentMessageIds = LinkedHashSet<String>();
+  final LinkedHashSet<String> _recentAnnouncementIds = LinkedHashSet<String>();
 
+  // Subscription is held for the process lifetime; [dispose] intentionally no-ops.
+  // ignore: unused_field
   StreamSubscription<RealtimeMessage>? _subscription;
   bool _started = false;
 
@@ -74,6 +85,15 @@ class RealtimeDispatcher {
     _recentMessageIds.add(messageId);
     while (_recentMessageIds.length > 64) {
       _recentMessageIds.remove(_recentMessageIds.first);
+    }
+    return false;
+  }
+
+  bool _dedupeAnnouncement(String announcementId) {
+    if (_recentAnnouncementIds.contains(announcementId)) return true;
+    _recentAnnouncementIds.add(announcementId);
+    while (_recentAnnouncementIds.length > 64) {
+      _recentAnnouncementIds.remove(_recentAnnouncementIds.first);
     }
     return false;
   }
@@ -115,20 +135,24 @@ class RealtimeDispatcher {
     if (cmd is GetStatusCommand) {
       final info = await PackageInfo.fromPlatform();
       final cacheMb = await _cache.approximateCacheSizeMb();
+      final detail = <String, dynamic>{
+        'appVersion': info.version,
+        'buildNumber': info.buildNumber,
+        'syncStatus': _telemetry.syncStatus,
+        'lastSuccessfulSyncUtc':
+            _telemetry.lastSuccessfulSyncUtc?.toUtc().toIso8601String(),
+        'currentPlaylistId': _telemetry.currentPlaylistId,
+        'currentScheduleId': _telemetry.currentScheduleId,
+      };
+      final mb = cacheMb;
+      if (mb != null) {
+        detail['cacheUsedMb'] = mb;
+      }
       await _fleetApi.postCommandAck(
         messageId: cmd.messageId,
         commandType: 'GET_STATUS',
         ok: true,
-        detail: <String, dynamic>{
-          'appVersion': info.version,
-          'buildNumber': info.buildNumber,
-          'syncStatus': _telemetry.syncStatus,
-          'lastSuccessfulSyncUtc':
-              _telemetry.lastSuccessfulSyncUtc?.toUtc().toIso8601String(),
-          'currentPlaylistId': _telemetry.currentPlaylistId,
-          'currentScheduleId': _telemetry.currentScheduleId,
-          if (cacheMb != null) 'cacheUsedMb': cacheMb,
-        },
+        detail: detail,
       );
       return;
     }
@@ -155,6 +179,27 @@ class RealtimeDispatcher {
       await _playlistSync.sync();
       return;
     }
+    if (cmd is AnnouncementCommand) {
+      if (_dedupeAnnouncement(cmd.announcementId)) return;
+      _player.beginAnnouncementHold();
+      final url = cmd.mediaUrl;
+      final kind =
+          (url != null && url.isNotEmpty)
+              ? (cmd.mediaKind == 'video'
+                  ? AnnouncementMediaKind.video
+                  : AnnouncementMediaKind.image)
+              : AnnouncementMediaKind.none;
+
+      _announcementOverlay.show(
+        announcementId: cmd.announcementId,
+        durationSec: cmd.durationSec,
+        mediaKind: kind,
+        mediaUrl: url,
+        onDismiss: _player.endAnnouncementHold,
+      );
+      return;
+    }
+
     if (cmd is EmergencyAlertCommand) {
       _emergencyOverlay.show(
         alertId: cmd.alertId,
@@ -176,9 +221,7 @@ class RealtimeDispatcher {
     }
   }
 
-  void dispose() {
-    unawaited(_subscription?.cancel());
-    _subscription = null;
-    _started = false;
-  }
+  /// [RealtimeDispatcher] is a process-wide singleton; do not tear down the
+  /// WebSocket subscription from UI scope. Deactivate only for tests if needed.
+  void dispose() {}
 }

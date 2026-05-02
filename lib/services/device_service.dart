@@ -27,7 +27,7 @@ class DeviceService {
     }
   }
 
-  /// Hard restart process (returns to launcher intent).
+  /// Relaunch the app via Android launcher intent (same fix as admin “Restart screen”).
   Future<void> restartApplication() async {
     if (!Platform.isAndroid) return;
     try {

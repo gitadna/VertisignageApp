@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../../../core/errors/app_exception.dart';
 import '../../../models/playlist_bundle.dart';
 import '../../../models/playlist_item.dart';
+import '../../../models/playlist_schedule_context.dart';
 import '../../../services/token_store.dart';
 import 'device_heartbeat_service.dart';
 import 'media_cache_service.dart';
@@ -51,6 +52,17 @@ class PlaylistSyncService extends ChangeNotifier {
   bool _syncRunning = false;
   bool _syncQueued = false;
   int _backoffAttempt = 0;
+  String? _lastSyncError;
+  bool _serverPlaylistEmpty = false;
+
+  /// True while a playlist fetch / prefetch round trip is in flight.
+  bool get isSyncing => _syncRunning;
+
+  /// Last sync failure message for kiosk UI (cleared on successful API response).
+  String? get lastSyncError => _lastSyncError;
+
+  /// Last successful API response had zero items (show empty state when [activeItems] is empty).
+  bool get serverPlaylistEmpty => _serverPlaylistEmpty;
 
   /// Items safe to play (cached files exist).
   List<PlaylistItem> get activeItems => List.unmodifiable(_active);
@@ -74,7 +86,7 @@ class PlaylistSyncService extends ChangeNotifier {
     unawaited(sync());
 
     _pollTimer ??= Timer.periodic(
-      const Duration(minutes: 15),
+      const Duration(minutes: 3),
       (_) => unawaited(sync()),
     );
 
@@ -104,10 +116,12 @@ class PlaylistSyncService extends ChangeNotifier {
       return;
     }
     _syncRunning = true;
+    notifyListeners();
     try {
       await _runSync();
     } finally {
       _syncRunning = false;
+      notifyListeners();
       if (_syncQueued) {
         _syncQueued = false;
         unawaited(sync());
@@ -139,9 +153,14 @@ class PlaylistSyncService extends ChangeNotifier {
       try {
         remote = await _api.fetchPlaylist(deviceId);
       } on AppAuthException catch (e) {
+        _lastSyncError = e.message;
+        _serverPlaylistEmpty = false;
         _log('sync stopped: session invalid (${e.message})');
         return;
       } catch (e, st) {
+        _lastSyncError =
+            'Could not reach the server. Check the connection and try again.';
+        _serverPlaylistEmpty = false;
         _log('sync network error: $e');
         if (kDebugMode) debugPrint('$st');
         _scheduleBackoffRetry();
@@ -150,16 +169,24 @@ class PlaylistSyncService extends ChangeNotifier {
 
       if (remote == null) {
         _log('sync: empty or failed response; keeping cached playback');
+        _lastSyncError =
+            'Could not load the playlist. Check the connection and try again.';
+        _serverPlaylistEmpty = false;
         _scheduleBackoffRetry();
         return;
       }
 
+      _lastSyncError = null;
       _backoffAttempt = 0;
 
       final stored = _storage.load();
 
       final pastBoundary = _isPastStoredBoundary(stored);
-      if (remote.version == stored?.version && !pastBoundary) {
+      final unchangedBundle = remote.version == stored?.version &&
+          !pastBoundary &&
+          _storedPlaylistMatchesRemote(stored, remote);
+      if (unchangedBundle) {
+        _serverPlaylistEmpty = remote.items.isEmpty;
         await _rebuildPlayableFromDiskIfChanged();
         _scheduleBoundaryTimer(stored?.nextBoundaryUtc);
         outcomeOk = true;
@@ -168,6 +195,22 @@ class PlaylistSyncService extends ChangeNotifier {
       }
 
       if (remote.items.isEmpty) {
+        _serverPlaylistEmpty = true;
+        final strictOutsideWindow = remote.schedule?.source == 'none';
+        if (strictOutsideWindow) {
+          _log(
+            'remote reported zero items (schedule.strict/no fallback); clearing playback',
+          );
+          await _storage.save(remote);
+          _pendingPlayable = null;
+          _active = [];
+          _epoch++;
+          notifyListeners();
+          _scheduleBoundaryTimer(remote.nextBoundaryUtc);
+          outcomeOk = true;
+          outcomeBundle = remote;
+          return;
+        }
         _log('remote reported zero items; keeping last known good playback');
         _scheduleBoundaryTimer(remote.nextBoundaryUtc);
         outcomeOk = true;
@@ -175,12 +218,18 @@ class PlaylistSyncService extends ChangeNotifier {
         return;
       }
 
+      _serverPlaylistEmpty = false;
+
       final playable = await _cache.prefetchAndFilter(remote.items);
 
       if (remote.items.isNotEmpty && playable.isEmpty) {
         _log(
           'prefetch produced no playable items; keeping current loop',
         );
+        if (_active.isEmpty) {
+          _lastSyncError =
+              'Could not prepare media. Check storage space and network.';
+        }
         _scheduleBoundaryTimer(remote.nextBoundaryUtc);
         return;
       }
@@ -198,7 +247,7 @@ class PlaylistSyncService extends ChangeNotifier {
         return;
       }
 
-      if (_listIdentical(_active, playable)) {
+      if (_playlistRowsEqual(_active, playable)) {
         _pendingPlayable = null;
         _scheduleBoundaryTimer(remote.nextBoundaryUtc);
         outcomeOk = true;
@@ -239,7 +288,7 @@ class PlaylistSyncService extends ChangeNotifier {
   bool commitPendingPlaylistAtBoundary() {
     final pending = _pendingPlayable;
     if (pending == null || pending.isEmpty) return false;
-    if (_listIdentical(_active, pending)) {
+    if (_playlistRowsEqual(_active, pending)) {
       _pendingPlayable = null;
       return false;
     }
@@ -270,18 +319,57 @@ class PlaylistSyncService extends ChangeNotifier {
     final bundle = _storage.load();
     if (bundle == null) return;
     final playable = await _cache.prefetchAndFilter(bundle.items);
-    if (_listIdentical(_active, playable)) return;
+    if (_playlistRowsEqual(_active, playable)) return;
     _active = playable;
     _epoch++;
     notifyListeners();
   }
 
-  bool _listIdentical(List<PlaylistItem> a, List<PlaylistItem> b) {
+  bool _storedPlaylistMatchesRemote(
+    PlaylistBundle? stored,
+    PlaylistBundle remote,
+  ) {
+    if (stored == null) return false;
+    return _playlistRowsEqual(stored.items, remote.items) &&
+        _scheduleEqual(stored.schedule, remote.schedule) &&
+        _instantUtcEqual(stored.nextBoundaryUtc, remote.nextBoundaryUtc);
+  }
+
+  bool _instantUtcEqual(DateTime? a, DateTime? b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    return a.toUtc().millisecondsSinceEpoch == b.toUtc().millisecondsSinceEpoch;
+  }
+
+  bool _scheduleEqual(
+    PlaylistScheduleContext? a,
+    PlaylistScheduleContext? b,
+  ) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    return a.source == b.source &&
+        a.playlistId == b.playlistId &&
+        a.scheduleId == b.scheduleId &&
+        a.name == b.name &&
+        a.priority == b.priority &&
+        a.timezone == b.timezone &&
+        _instantUtcEqual(a.windowStartUtc, b.windowStartUtc) &&
+        _instantUtcEqual(a.windowEndUtc, b.windowEndUtc);
+  }
+
+  bool _playlistRowsEqual(List<PlaylistItem> a, List<PlaylistItem> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
-      if (a[i].id != b[i].id ||
-          a[i].url != b[i].url ||
-          a[i].mediaKind != b[i].mediaKind) {
+      final x = a[i];
+      final y = b[i];
+      if (x.id != y.id ||
+          x.url != y.url ||
+          x.mediaKind != y.mediaKind ||
+          x.durationMs != y.durationMs ||
+          x.order != y.order ||
+          x.muted != y.muted ||
+          x.transition != y.transition ||
+          x.fitMode != y.fitMode) {
         return false;
       }
     }

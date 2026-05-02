@@ -85,7 +85,7 @@ class EnvironmentConfig {
 
     const cacheMbRaw = String.fromEnvironment(
       'MAX_MEDIA_CACHE_MB',
-      defaultValue: '2048',
+      defaultValue: '400',
     );
 
     final api = apiRaw.trim();
@@ -96,7 +96,7 @@ class EnvironmentConfig {
       return l == 'true' || l == '1';
     }
 
-    final cacheMb = int.tryParse(cacheMbRaw.trim()) ?? 2048;
+    final cacheMb = int.tryParse(cacheMbRaw.trim()) ?? 400;
 
     return EnvironmentConfig(
       environment: env,
@@ -106,7 +106,7 @@ class EnvironmentConfig {
       enableRemoteLogShipping: flag(remoteLogsRaw),
       enableOtaInstall: flag(otaRaw),
       enableSafeMode: flag(safeModeRaw),
-      maxMediaCacheMb: cacheMb.clamp(128, 8192).toInt(),
+      maxMediaCacheMb: cacheMb.clamp(300, 512).toInt(),
     );
   }
 

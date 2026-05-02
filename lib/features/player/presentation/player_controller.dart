@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../../core/constants/app_constants.dart';
 import '../../../models/playlist_item.dart';
 import '../data/media_cache_service.dart';
 import '../data/playlist_sync_service.dart';
@@ -32,6 +33,9 @@ class PlayerController {
   })  : _cache = cache,
         _sync = sync {
     _sync.addListener(_onPlaylistChanged);
+    userPaused.addListener(_syncPlaybackSuspended);
+    announcementHold.addListener(_syncPlaybackSuspended);
+    _syncPlaybackSuspended();
   }
 
   final MediaCacheService _cache;
@@ -44,12 +48,117 @@ class PlayerController {
   int _index = 0;
   Timer? _slideTimer;
   Timer? _webLoadTimer;
+  Timer? _progressWatchdog;
   bool _running = false;
   bool _handledRasterFailure = false;
   int _lastEpoch = -1;
   int _generationCounter = 0;
 
+  /// When true, auto-advance timers are off and video should be paused.
+  final ValueNotifier<bool> userPaused = ValueNotifier<bool>(false);
+
+  /// Full-screen announcement overlay is blocking normal playlist timing.
+  final ValueNotifier<bool> announcementHold = ValueNotifier<bool>(false);
+
+  /// Union of [userPaused] and [announcementHold] for timers and video decoder.
+  final ValueNotifier<bool> playbackSuspended = ValueNotifier<bool>(false);
+
   List<PlaylistItem> get playlist => _playlist;
+
+  void _syncPlaybackSuspended() {
+    playbackSuspended.value = userPaused.value || announcementHold.value;
+  }
+
+  /// Pause playlist dwell timers and video while an announcement is shown.
+  void beginAnnouncementHold() {
+    if (announcementHold.value) return;
+    announcementHold.value = true;
+    _cancelDwellAndWatchdog();
+    _webLoadTimer?.cancel();
+    _webLoadTimer = null;
+  }
+
+  /// Resume after announcement dismisses (only clears announcement hold).
+  void endAnnouncementHold() {
+    if (!announcementHold.value) return;
+    announcementHold.value = false;
+    _resumeAdvanceTimers();
+  }
+
+  /// Pauses auto-advance and in-flight slide timers (WebView initial load timeout keeps running).
+  void requestPause() {
+    if (!userPaused.value) {
+      userPaused.value = true;
+    }
+    _cancelDwellAndWatchdog();
+  }
+
+  /// Resumes timers for the current slide and clears [userPaused].
+  void requestResume() {
+    if (!userPaused.value) return;
+    userPaused.value = false;
+    _resumeAdvanceTimers();
+  }
+
+  void togglePause() {
+    if (userPaused.value) {
+      requestResume();
+    } else {
+      requestPause();
+    }
+  }
+
+  Future<void> goToNext() async {
+    await _goToNextSlide();
+  }
+
+  Future<void> goToPrevious() async {
+    await _goToPreviousSlide();
+  }
+
+  void _cancelDwellAndWatchdog() {
+    _slideTimer?.cancel();
+    _slideTimer = null;
+    _progressWatchdog?.cancel();
+    _progressWatchdog = null;
+  }
+
+  void _resumeAdvanceTimers() {
+    if (!_running || playbackSuspended.value) return;
+    final state = display.value;
+    if (state == null || _playlist.isEmpty) return;
+
+    final gen = state.generation;
+    final item = state.item;
+
+    if (item.mediaKind == PlaylistMediaKind.url && state.isWebSlide) {
+      final ms = item.durationMs <= 0 ? 10000 : item.durationMs;
+      _armProgressWatchdog(gen);
+      _slideTimer = Timer(Duration(milliseconds: ms), () {
+        unawaited(_onDwellElapsed(gen));
+      });
+      return;
+    }
+
+    _armProgressWatchdog(gen);
+    final ms = item.durationMs <= 0 ? 1000 : item.durationMs;
+    _slideTimer = Timer(Duration(milliseconds: ms), () {
+      unawaited(_onDwellElapsed(gen));
+    });
+  }
+
+  Future<void> _goToPreviousSlide() async {
+    if (!_running) return;
+    _cancelTimers();
+
+    if (_sync.commitPendingPlaylistAtBoundary()) {
+      return;
+    }
+
+    if (_playlist.isEmpty) return;
+    _index = (_index - 1 + _playlist.length) % _playlist.length;
+    await _presentCurrent();
+  }
 
   void _onPlaylistChanged() {
     final epoch = _sync.playbackEpoch;
@@ -60,18 +169,22 @@ class PlayerController {
     _handledRasterFailure = false;
     _cancelTimers();
     if (!_running) return;
+    if (_playlist.isEmpty) {
+      display.value = null;
+      return;
+    }
     unawaited(_presentCurrent());
   }
 
   void start() {
     _lastEpoch = _sync.playbackEpoch;
     _playlist = List.unmodifiable(_sync.activeItems);
+    if (_running) return;
+    _running = true;
     if (_playlist.isEmpty) {
       display.value = null;
       return;
     }
-    if (_running) return;
-    _running = true;
     unawaited(_presentCurrent());
   }
 
@@ -85,6 +198,17 @@ class PlayerController {
     _slideTimer = null;
     _webLoadTimer?.cancel();
     _webLoadTimer = null;
+    _progressWatchdog?.cancel();
+    _progressWatchdog = null;
+  }
+
+  void _armProgressWatchdog(int generation) {
+    _progressWatchdog?.cancel();
+    _progressWatchdog = Timer(AppConstants.stuckSlideWatchdog, () {
+      if (!_running) return;
+      if (display.value?.generation != generation) return;
+      unawaited(_goToNextSlide());
+    });
   }
 
   Future<void> _goToNextSlide() async {
@@ -130,6 +254,10 @@ class PlayerController {
         unawaited(onWebLoadFailed());
       });
 
+      if (!playbackSuspended.value) {
+        _armProgressWatchdog(gen);
+      }
+
       unawaited(_preloadNext());
       return;
     }
@@ -151,10 +279,14 @@ class PlayerController {
 
     unawaited(_preloadNext());
 
-    final ms = item.durationMs <= 0 ? 1000 : item.durationMs;
-    _slideTimer = Timer(Duration(milliseconds: ms), () {
-      unawaited(_onDwellElapsed(gen));
-    });
+    if (!playbackSuspended.value) {
+      _armProgressWatchdog(gen);
+
+      final ms = item.durationMs <= 0 ? 1000 : item.durationMs;
+      _slideTimer = Timer(Duration(milliseconds: ms), () {
+        unawaited(_onDwellElapsed(gen));
+      });
+    }
   }
 
   Future<void> _onDwellElapsed(int token) async {
@@ -179,8 +311,13 @@ class PlayerController {
     _webLoadTimer?.cancel();
     _webLoadTimer = null;
 
+    if (playbackSuspended.value) {
+      return;
+    }
+
     final ms = state.item.durationMs <= 0 ? 10000 : state.item.durationMs;
     final token = state.generation;
+    _armProgressWatchdog(token);
     _slideTimer = Timer(Duration(milliseconds: ms), () {
       unawaited(_onDwellElapsed(token));
     });
@@ -213,6 +350,9 @@ class PlayerController {
   void dispose() {
     _sync.removeListener(_onPlaylistChanged);
     stop();
+    userPaused.dispose();
+    announcementHold.dispose();
+    playbackSuspended.dispose();
     display.dispose();
   }
 }

@@ -79,6 +79,27 @@ class ClearCacheCommand extends RealtimeCommand {
   final String messageId;
 }
 
+class AnnouncementCommand extends RealtimeCommand {
+  const AnnouncementCommand({
+    required this.announcementId,
+    required this.title,
+    // Optional: kiosk overlay is media-only; uncomment usage if we show body text.
+    this.body,
+    required this.durationSec,
+    this.mediaUrl,
+    this.mediaKind,
+  });
+
+  final String announcementId;
+  final String title;
+  final String? body;
+  final int durationSec;
+  /// Resolved playback URL (legacy payloads used `imageUrl` only).
+  final String? mediaUrl;
+  /// Server hint: `image` or `video`.
+  final String? mediaKind;
+}
+
 /// JSON → typed command; unknown types return null (ignored).
 RealtimeCommand? parseRealtimeCommand(String raw) {
   try {
@@ -159,6 +180,28 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final mid = payload['messageId'] as String?;
         if (mid == null) return null;
         return ClearCacheCommand(messageId: mid);
+      case 'ANNOUNCEMENT':
+        if (payload is! Map<String, dynamic>) return null;
+        final aid = payload['announcementId'] as String?;
+        if (aid == null || aid.isEmpty) return null;
+        final title = (payload['title'] as String?)?.trim();
+        // ignore: unused_local_variable — wire field kept for future body UI.
+        final bodyRaw = (payload['body'] as String?)?.trim();
+        final ds = payload['durationSec'];
+        final durationSec = ds is num ? ds.round() : 15;
+        final rawMedia = payload['mediaUrl'] ?? payload['imageUrl'];
+        final mediaUrl = rawMedia is String && rawMedia.trim().isNotEmpty
+            ? rawMedia.trim()
+            : null;
+        final mediaKind = payload['mediaKind'] as String?;
+        return AnnouncementCommand(
+          announcementId: aid,
+          title: (title == null || title.isEmpty) ? 'Announcement' : title,
+          body: (bodyRaw != null && bodyRaw.isNotEmpty) ? bodyRaw : null,
+          durationSec: durationSec,
+          mediaUrl: mediaUrl,
+          mediaKind: mediaKind,
+        );
       default:
         return null;
     }

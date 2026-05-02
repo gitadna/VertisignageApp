@@ -18,8 +18,16 @@ class ErrorMapperInterceptor extends Interceptor {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.receiveTimeout:
+        // return AppNetworkException(
+        //   'Request timed out. If the API runs on your PC: open Windows Firewall '
+        //   'inbound TCP port 4000 (or your PORT), bind the server to all interfaces '
+        //   '(0.0.0.0), put the phone on the same Wi‑Fi as the PC, and verify the IP '
+        //   'in dart-define matches ipconfig.',
+        //   cause: err,
+        //   statusCode: code,
+        // );
         return AppNetworkException(
-          'Connection timed out',
+            'Request timed out.',
           cause: err,
           statusCode: code,
         );

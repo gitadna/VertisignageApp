@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core/constants/app_constants.dart';
+import 'core/theme/app_theme.dart';
 import 'features/kiosk_shell/presentation/app_shell.dart';
 
 class VertisignageApp extends StatelessWidget {
@@ -11,10 +12,9 @@ class VertisignageApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: AppConstants.appName,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.light,
       home: const AppShell(),
     );
   }

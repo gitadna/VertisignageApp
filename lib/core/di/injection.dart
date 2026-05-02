@@ -61,6 +61,7 @@ Future<void> configureDependencies() async {
     () => RemoteLogUploader(
       api: sl<KioskFleetApi>(),
       env: env,
+      storage: sl<LocalStorage>(),
     ),
   );
 

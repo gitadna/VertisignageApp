@@ -33,6 +33,7 @@ class PlaylistItem {
     required this.order,
     this.muted = false,
     this.transition = 'fade',
+    this.fitMode = 'fill',
   });
 
   final String id;
@@ -44,8 +45,11 @@ class PlaylistItem {
   /// Applies to video playback (playlist row default from CMS).
   final bool muted;
 
-  /// CMS transition id (phase 5 supports `fade` only in UI).
+  /// CMS transition id: `fade`, `slideUp`, `slideDown`, `slideLeft`, `slideRight`, `zoom`.
   final String transition;
+
+  /// CMS fit mode: `fill` (cover), `fit` (contain), `stretch`.
+  final String fitMode;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -55,6 +59,7 @@ class PlaylistItem {
         'order': order,
         'muted': muted,
         'transition': transition,
+        'fitMode': fitMode,
       };
 
   factory PlaylistItem.fromJson(Map<String, dynamic> json) {
@@ -66,6 +71,7 @@ class PlaylistItem {
       order: (json['order'] as num?)?.toInt() ?? 0,
       muted: json['muted'] as bool? ?? false,
       transition: (json['transition'] as String?)?.toLowerCase() ?? 'fade',
+      fitMode: (json['fitMode'] as String?)?.toLowerCase() ?? 'fill',
     );
   }
 }

@@ -51,9 +51,34 @@ class PairingApi {
         accessToken: token,
       );
     } on DioException catch (e) {
+      if (_isLocalhostOnDevice(e)) {
+        throw const AppNetworkException(
+          'This build still points at localhost. The API base URL is fixed at '
+          'compile time (String.fromEnvironment), not at runtime. Stop the app, '
+          'cd to the app folder, and run: flutter run --flavor kiosk '
+          '--dart-define=API_BASE_URL=http://<PC_LAN_IP>:4000 '
+          '--dart-define=WS_URL=ws://<PC_LAN_IP>:4000/ws — use your ipconfig '
+          'IPv4. Hot reload does not change the URL. Or use USB: '
+          'adb reverse tcp:4000 tcp:4000, then run with default localhost.',
+        );
+      }
       final mapped = _mapDioException(e);
       throw mapped;
     }
+  }
+
+  /// [localhost] / [127.0.0.1] on a physical device never reaches the dev machine.
+  bool _isLocalhostOnDevice(DioException e) {
+    final base = _dio.options.baseUrl.toLowerCase();
+    final pointsToLoopback =
+        base.contains('localhost') || base.contains('127.0.0.1');
+    if (!pointsToLoopback) return false;
+    if (e.type == DioExceptionType.connectionError ||
+        e.type == DioExceptionType.connectionTimeout) {
+      return true;
+    }
+    final msg = e.message?.toLowerCase() ?? '';
+    return msg.contains('connection refused') || msg.contains('failed host lookup');
   }
 
   AppException _mapDioException(DioException e) {

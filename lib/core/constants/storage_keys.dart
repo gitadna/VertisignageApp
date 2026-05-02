@@ -21,4 +21,16 @@ abstract final class StorageKeys {
 
   /// When true, UI stays in minimal recovery mode until cleared.
   static const String safeMode = 'safe_mode';
+
+  /// JSON map of cache file path → last-access epoch ms (media LRU).
+  static const String mediaCacheLruJson = 'media_cache_lru_json';
+
+  /// JSON array of pending structured log entries (offline / retry).
+  static const String remoteLogQueueJson = 'remote_log_queue_json';
+
+  /// JSON array of serialized heartbeat payloads awaiting retry.
+  static const String heartbeatRetryQueueJson = 'heartbeat_retry_queue_json';
+
+  /// `'1'` once Android overlay + battery onboarding finished ([KioskPermissionsGate]).
+  static const String kioskPowerSetupComplete = 'kiosk_power_setup_complete';
 }

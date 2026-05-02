@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- OTA / sideload updates only for kiosk flavor builds. Omit in `play` flavor. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+</manifest>

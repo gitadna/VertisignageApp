@@ -30,6 +30,18 @@ android {
         versionName = flutter.versionName
     }
 
+    // `kiosk`: internal/sideload APKs may use OTA install (`REQUEST_INSTALL_PACKAGES` in src/kiosk).
+    // `play`: Play-distribution variant without that permission.
+    flavorDimensions += listOf("dist")
+    productFlavors {
+        create("kiosk") {
+            dimension = "dist"
+        }
+        create("play") {
+            dimension = "dist"
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

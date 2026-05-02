@@ -16,6 +16,7 @@ void main() {
           order: 0,
           muted: false,
           transition: 'fade',
+          fitMode: 'fit',
         ),
       ],
     );
@@ -24,6 +25,7 @@ void main() {
     expect(back.items.length, 1);
     expect(back.items.first.url, bundle.items.first.url);
     expect(back.items.first.mediaKind, PlaylistMediaKind.image);
+    expect(back.items.first.fitMode, 'fit');
   });
 
   test('PlaylistBundle JSON roundtrip with schedule metadata', () {
@@ -44,5 +46,20 @@ void main() {
     expect(back.schedule?.playlistId, 'pl1');
     expect(back.schedule?.scheduleId, 'sch1');
     expect(back.nextBoundaryUtc?.hour, 13);
+  });
+
+  test('PlaylistBundle roundtrip with schedule source none (strict)', () {
+    final bundle = PlaylistBundle(
+      version: 'none|boundary|org',
+      items: const [],
+      schedule: const PlaylistScheduleContext(
+        source: 'none',
+        playlistId: '',
+      ),
+    );
+    final back = PlaylistBundle.fromJson(bundle.toJson());
+    expect(back.schedule?.source, 'none');
+    expect(back.schedule?.playlistId, '');
+    expect(back.items, isEmpty);
   });
 }

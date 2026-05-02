@@ -9,6 +9,7 @@ import '../../pairing/presentation/pairing_screen.dart';
 import '../../player/presentation/player_controller.dart';
 import '../../player/presentation/player_screen.dart';
 import '../../player/presentation/safe_mode_screen.dart';
+import 'kiosk_permissions_gate.dart';
 
 /// Single-home gate: pairing vs player when paired (no routes).
 class AppShell extends StatefulWidget {
@@ -75,7 +76,9 @@ class _AppShellState extends State<AppShell> {
           return const SafeModeScreen();
         }
         if (store.hasPairedDevice) {
-          return PlayerScreen(controller: sl<PlayerController>());
+          return KioskPermissionsGate(
+            child: PlayerScreen(controller: sl<PlayerController>()),
+          );
         }
 
         final c = _pairingController;

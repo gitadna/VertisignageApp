@@ -11,13 +11,17 @@ import '../features/player/data/remote_log_uploader.dart';
 import '../services/device_service.dart';
 import '../services/token_store.dart';
 import 'connectivity_coordinator.dart';
+import 'fleet_realtime_coordinator.dart';
 
 /// Post-DI kiosk wiring: global errors, immersive chrome, connectivity, foreground, lock task.
 abstract final class KioskPostBootstrap {
   static Future<void> configure(GetIt sl) async {
     sl<KioskRecoveryStore>().restoreGateFromDisk();
+    await sl<RemoteLogUploader>().restoreFromDisk();
     KioskLog.bindRemoteSink(sl<RemoteLogUploader>().enqueue);
     GlobalErrorHandler.install();
+
+    sl<FleetRealtimeCoordinator>().start();
 
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 

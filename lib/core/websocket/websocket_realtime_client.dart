@@ -55,6 +55,11 @@ class WebSocketRealtimeClient implements RealtimeClient {
   @override
   Future<void> connect() async {
     if (_connectInFlight) return;
+    if (!_userDisconnected &&
+        _channel != null &&
+        _subscription != null) {
+      return;
+    }
     _userDisconnected = false;
     _connectInFlight = true;
     try {
@@ -92,7 +97,7 @@ class WebSocketRealtimeClient implements RealtimeClient {
       _reconnectTimer = null;
       _reconnectAttempt = 0;
       _emit(RealtimeConnectionState.connected);
-    } catch (_, __) {
+    } catch (_) {
       _emit(RealtimeConnectionState.reconnecting);
       _scheduleReconnect();
     }

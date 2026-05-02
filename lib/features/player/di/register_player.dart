@@ -3,11 +3,13 @@ import 'package:get_it/get_it.dart';
 
 import '../../../core/config/environment_config.dart';
 import '../../../core/storage/local_storage.dart';
+import '../../../kiosk/fleet_realtime_coordinator.dart';
 import '../../../core/websocket/realtime_client.dart';
 import '../../../kiosk/connectivity_coordinator.dart';
 import '../../../services/device_service.dart';
 import '../../../services/token_store.dart';
 import '../data/device_heartbeat_service.dart';
+import '../data/announcement_overlay_notifier.dart';
 import '../data/emergency_overlay_notifier.dart';
 import '../data/kiosk_fleet_api.dart';
 import '../data/media_cache_service.dart';
@@ -23,6 +25,7 @@ import '../presentation/player_controller.dart';
 void registerPlayerModule(GetIt getIt) {
   getIt.registerLazySingleton<MediaCacheService>(
     () => MediaCacheService(
+      persistentStorage: getIt<LocalStorage>(),
       maxCacheMb: getIt<EnvironmentConfig>().maxMediaCacheMb,
     ),
   );
@@ -39,6 +42,7 @@ void registerPlayerModule(GetIt getIt) {
       tokenStore: getIt<TokenStore>(),
       telemetry: getIt<PlayerTelemetry>(),
       cache: getIt<MediaCacheService>(),
+      storage: getIt<LocalStorage>(),
     ),
   );
 
@@ -64,6 +68,10 @@ void registerPlayerModule(GetIt getIt) {
     EmergencyOverlayNotifier.new,
   );
 
+  getIt.registerLazySingleton<AnnouncementOverlayNotifier>(
+    AnnouncementOverlayNotifier.new,
+  );
+
   getIt.registerLazySingleton<ConnectivityCoordinator>(
     () => ConnectivityCoordinator(getIt<PlaylistSyncService>()),
   );
@@ -73,12 +81,22 @@ void registerPlayerModule(GetIt getIt) {
       realtime: getIt<RealtimeClient>(),
       playlistSync: getIt<PlaylistSyncService>(),
       emergencyOverlay: getIt<EmergencyOverlayNotifier>(),
+      announcementOverlay: getIt<AnnouncementOverlayNotifier>(),
+      player: getIt<PlayerController>(),
       tokenStore: getIt<TokenStore>(),
       device: getIt<DeviceService>(),
       fleetApi: getIt<KioskFleetApi>(),
       cache: getIt<MediaCacheService>(),
       ota: getIt<OtaUpdateService>(),
       telemetry: getIt<PlayerTelemetry>(),
+    ),
+  );
+
+  getIt.registerLazySingleton<FleetRealtimeCoordinator>(
+    () => FleetRealtimeCoordinator(
+      tokenStore: getIt<TokenStore>(),
+      dispatcher: getIt<RealtimeDispatcher>(),
+      realtime: getIt<RealtimeClient>(),
     ),
   );
 }

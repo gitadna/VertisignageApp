@@ -22,12 +22,13 @@ class DioProvider {
     required TokenStore tokenStore,
     AuthRefresher? authRefresher,
   }) {
+    final isDev = config.environment != AppEnvironment.production;
     final dio = Dio(
       BaseOptions(
         baseUrl: config.apiBaseUrl,
-        connectTimeout: const Duration(seconds: 30),
-        receiveTimeout: const Duration(seconds: 30),
-        sendTimeout: const Duration(seconds: 30),
+        connectTimeout: Duration(seconds: isDev ? 60 : 30),
+        receiveTimeout: Duration(seconds: isDev ? 90 : 30),
+        sendTimeout: Duration(seconds: isDev ? 60 : 30),
         headers: const {'Content-Type': 'application/json'},
       ),
     );

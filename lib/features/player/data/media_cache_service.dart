@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,6 +8,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/constants/storage_keys.dart';
+import '../../../core/storage/local_storage.dart';
 import '../../../models/playlist_item.dart';
 
 /// Downloads remote images/videos into app support storage; memoizes URL → path.
@@ -14,7 +17,8 @@ import '../../../models/playlist_item.dart';
 class MediaCacheService {
   MediaCacheService({
     Dio? downloadClient,
-    this.maxCacheMb = 2048,
+    LocalStorage? persistentStorage,
+    this.maxCacheMb = 400,
   }) : _dio = downloadClient ??
             Dio(
               BaseOptions(
@@ -22,21 +26,180 @@ class MediaCacheService {
                 receiveTimeout: const Duration(minutes: 15),
                 responseType: ResponseType.bytes,
               ),
-            );
+            ),
+        _persistentStorage = persistentStorage;
 
   final Dio _dio;
+  final LocalStorage? _persistentStorage;
+
+  /// Upper bound from fleet config (typically 300–512 MB).
   final int maxCacheMb;
 
   final Map<String, String> _pathByUrl = {};
+  final Map<String, int> _lastAccessEpochMs = {};
+
   Directory? _cacheDir;
+  bool _lruHydrated = false;
+  int? _trackedTotalBytes;
+
+  int get budgetBytes => maxCacheMb * 1024 * 1024;
 
   Future<Directory> _directory() async {
+    await _hydrateLruFromDiskOnce();
     if (_cacheDir != null) return _cacheDir!;
     final root = await getApplicationSupportDirectory();
     final dir = Directory(p.join(root.path, 'media_cache'));
     await dir.create(recursive: true);
     _cacheDir = dir;
     return dir;
+  }
+
+  Future<void> _hydrateLruFromDiskOnce() async {
+    if (_lruHydrated) return;
+    _lruHydrated = true;
+    final storage = _persistentStorage;
+    if (storage == null) return;
+    try {
+      final raw = storage.getString(
+        StorageKeys.deviceBox,
+        StorageKeys.mediaCacheLruJson,
+      );
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      for (final e in decoded.entries) {
+        final k = e.key;
+        final v = e.value;
+        if (k is String && v is num) {
+          _lastAccessEpochMs[k] = v.toInt();
+        }
+      }
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('MediaCacheService LRU hydrate: $e\n$st');
+      }
+    }
+  }
+
+  Future<void> _persistLruToDisk() async {
+    final storage = _persistentStorage;
+    if (storage == null) return;
+    try {
+      await storage.setString(
+        StorageKeys.deviceBox,
+        StorageKeys.mediaCacheLruJson,
+        jsonEncode(_lastAccessEpochMs),
+      );
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('MediaCacheService LRU persist: $e\n$st');
+      }
+    }
+  }
+
+  void _touchPath(String path) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _lastAccessEpochMs[path] = now;
+    unawaited(_persistLruToDisk());
+  }
+
+  Future<int> _directoryTotalBytes(Directory dir) async {
+    var total = 0;
+    if (!await dir.exists()) return 0;
+    await for (final e in dir.list(recursive: true)) {
+      if (e is File) {
+        total += await e.length();
+      }
+    }
+    return total;
+  }
+
+  Future<void> _refreshTrackedTotal() async {
+    final dir = await _directory();
+    _trackedTotalBytes = await _directoryTotalBytes(dir);
+  }
+
+  /// Approximate cache usage in megabytes (best-effort).
+  Future<int?> approximateCacheSizeMb() async {
+    try {
+      await _refreshTrackedTotal();
+      final t = _trackedTotalBytes ?? 0;
+      return (t / (1024 * 1024)).round();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _ensureSpaceForIncomingBytes(int incomingLen) async {
+    await _directory();
+    if (_trackedTotalBytes == null) {
+      await _refreshTrackedTotal();
+    }
+    final budget = budgetBytes;
+    while ((_trackedTotalBytes ?? 0) + incomingLen > budget) {
+      final freed = await _evictLeastRecentlyUsedOne();
+      if (!freed) break;
+    }
+  }
+
+  Future<bool> _evictLeastRecentlyUsedOne() async {
+    try {
+      final dir = await _directory();
+      if (!await dir.exists()) return false;
+
+      final files = <File>[];
+      await for (final e in dir.list()) {
+        if (e is File) files.add(e);
+      }
+      if (files.isEmpty) return false;
+
+      File? victim;
+      var bestScore = 1 << 62;
+
+      for (final f in files) {
+        final path = f.path;
+        final stored = _lastAccessEpochMs[path];
+        final score = stored ??
+            (await f.stat()).modified.millisecondsSinceEpoch;
+        if (score < bestScore) {
+          bestScore = score;
+          victim = f;
+        }
+      }
+      if (victim == null) return false;
+
+      final path = victim.path;
+      final len = await victim.length();
+      try {
+        await victim.delete();
+      } catch (_) {
+        return false;
+      }
+      _pathByUrl.removeWhere((_, p) => p == path);
+      _lastAccessEpochMs.remove(path);
+      unawaited(_persistLruToDisk());
+      _trackedTotalBytes = (_trackedTotalBytes ?? 0) - len;
+      if (_trackedTotalBytes! < 0) {
+        _trackedTotalBytes = 0;
+      }
+      return true;
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('MediaCacheService._evictLeastRecentlyUsedOne: $e\n$st');
+      }
+      return false;
+    }
+  }
+
+  Future<void> _enforceBudgetIfNeeded() async {
+    final budget = budgetBytes;
+    if (_trackedTotalBytes == null) {
+      await _refreshTrackedTotal();
+    }
+    while ((_trackedTotalBytes ?? 0) > budget) {
+      final ok = await _evictLeastRecentlyUsedOne();
+      if (!ok) break;
+    }
   }
 
   /// Returns a local file path for [url], or `null` after one retry if download fails.
@@ -46,6 +209,7 @@ class MediaCacheService {
 
     final cached = _pathByUrl[trimmed];
     if (cached != null && await File(cached).exists()) {
+      _touchPath(cached);
       return cached;
     }
     _pathByUrl.remove(trimmed);
@@ -73,11 +237,17 @@ class MediaCacheService {
       final bytes = response.data;
       if (bytes == null || bytes.isEmpty) return null;
 
+      final len = bytes.length;
+      await _ensureSpaceForIncomingBytes(len);
+
       final dir = await _directory();
       final name = _fileNameForUrl(url);
       final file = File(p.join(dir.path, name));
       await file.writeAsBytes(bytes, flush: true);
       if (!await file.exists()) return null;
+
+      _trackedTotalBytes = (_trackedTotalBytes ?? 0) + len;
+      _touchPath(file.path);
       await _enforceBudgetIfNeeded();
       return file.path;
     } catch (e, st) {
@@ -85,44 +255,6 @@ class MediaCacheService {
         debugPrint('MediaCacheService: failed for $url — $e\n$st');
       }
       return null;
-    }
-  }
-
-  Future<void> _enforceBudgetIfNeeded() async {
-    final budgetBytes = maxCacheMb * 1024 * 1024;
-    try {
-      final dir = await _directory();
-      if (!await dir.exists()) return;
-
-      final files = <File>[];
-      await for (final e in dir.list()) {
-        if (e is File) files.add(e);
-      }
-      var total = 0;
-      for (final f in files) {
-        total += await f.length();
-      }
-      if (total <= budgetBytes) return;
-
-      files.sort((a, b) {
-        final ta = a.statSync().modified;
-        final tb = b.statSync().modified;
-        return ta.compareTo(tb);
-      });
-
-      for (final f in files) {
-        if (total <= budgetBytes) break;
-        try {
-          final len = await f.length();
-          await f.delete();
-          total -= len;
-          _pathByUrl.removeWhere((_, path) => path == f.path);
-        } catch (_) {}
-      }
-    } catch (e, st) {
-      if (kDebugMode) {
-        debugPrint('MediaCacheService._enforceBudgetIfNeeded: $e\n$st');
-      }
     }
   }
 
@@ -150,7 +282,17 @@ class MediaCacheService {
   /// Deletes cached media files and clears the memo map (WebSocket CLEAR_CACHE).
   Future<void> clearDiskCache() async {
     _pathByUrl.clear();
+    _lastAccessEpochMs.clear();
+    _trackedTotalBytes = 0;
+    _lruHydrated = false;
     try {
+      final storage = _persistentStorage;
+      if (storage != null) {
+        await storage.remove(
+          StorageKeys.deviceBox,
+          StorageKeys.mediaCacheLruJson,
+        );
+      }
       final dir = await _directory();
       if (!await dir.exists()) return;
       await for (final entity in dir.list()) {
@@ -162,21 +304,6 @@ class MediaCacheService {
       if (kDebugMode) {
         debugPrint('MediaCacheService.clearDiskCache: $e\n$st');
       }
-    }
-  }
-
-  /// Approximate cache usage in megabytes (best-effort).
-  Future<int?> approximateCacheSizeMb() async {
-    try {
-      final dir = await _directory();
-      var total = 0;
-      if (!await dir.exists()) return 0;
-      await for (final e in dir.list(recursive: true)) {
-        if (e is File) total += await e.length();
-      }
-      return (total / (1024 * 1024)).round();
-    } catch (_) {
-      return null;
     }
   }
 

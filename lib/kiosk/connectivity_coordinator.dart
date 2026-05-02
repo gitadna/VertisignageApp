@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:flutter/foundation.dart';
 
 import '../core/logging/kiosk_log.dart';
 import '../features/player/data/playlist_sync_service.dart';

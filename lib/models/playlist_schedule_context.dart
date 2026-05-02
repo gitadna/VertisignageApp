@@ -11,7 +11,7 @@ class PlaylistScheduleContext {
     this.windowEndUtc,
   });
 
-  /// `schedule` or `fallback_org`
+  /// `schedule`, `fallback_org`, or `none` (strict: no active schedule window).
   final String source;
   final String playlistId;
   final String? scheduleId;

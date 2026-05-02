@@ -114,28 +114,38 @@ class MainActivity : FlutterActivity() {
         am.setStreamVolume(AudioManager.STREAM_MUSIC, idx, 0)
     }
 
+    /**
+     * Relaunch this app's launcher activity.
+     *
+     * Do not call [Runtime.exit] here: it tears down the VM immediately so the new
+     * task often never comes up — looks like "app closes but does not restart" on device and emulator.
+     */
     private fun restartApp() {
-        val intent = packageManager.getLaunchIntentForPackage(packageName)
-        intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return
+        intent.addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK,
+        )
         startActivity(intent)
-        finish()
-        Runtime.getRuntime().exit(0)
+        finishAffinity()
     }
 
     private fun installApkFile(file: File): Boolean = try {
-        if (!file.exists()) return false
-        val uri = FileProvider.getUriForFile(
-            this,
-            "$packageName.fileprovider",
-            file,
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (!file.exists()) {
+            false
+        } else {
+            val uri = FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                file,
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+            true
         }
-        startActivity(intent)
-        true
     } catch (_: Exception) {
         false
     }
