@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../../../core/di/injection.dart';
+import '../../../core/recovery/safe_mode_gate.dart';
 import '../../../services/token_store.dart';
 import '../../pairing/presentation/pairing_controller.dart';
 import '../../pairing/presentation/pairing_screen.dart';
 import '../../player/presentation/player_controller.dart';
 import '../../player/presentation/player_screen.dart';
+import '../../player/presentation/safe_mode_screen.dart';
 
 /// Single-home gate: pairing vs player when paired (no routes).
 class AppShell extends StatefulWidget {
@@ -64,15 +66,25 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final store = _tokenStore;
-    if (store.hasPairedDevice) {
-      return PlayerScreen(controller: sl<PlayerController>());
-    }
+    final gate = sl<SafeModeGate>();
 
-    final c = _pairingController;
-    if (c == null) {
-      return const Scaffold(body: SizedBox.shrink());
-    }
+    return ListenableBuilder(
+      listenable: gate,
+      builder: (context, _) {
+        if (store.hasPairedDevice && gate.value) {
+          return const SafeModeScreen();
+        }
+        if (store.hasPairedDevice) {
+          return PlayerScreen(controller: sl<PlayerController>());
+        }
 
-    return PairingScreen(controller: c);
+        final c = _pairingController;
+        if (c == null) {
+          return const Scaffold(body: SizedBox.shrink());
+        }
+
+        return PairingScreen(controller: c);
+      },
+    );
   }
 }

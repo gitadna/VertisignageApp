@@ -9,6 +9,7 @@ import '../../../models/playlist_item.dart';
 import '../../../services/token_store.dart';
 import 'device_heartbeat_service.dart';
 import 'media_cache_service.dart';
+import 'player_telemetry.dart';
 import 'playlist_api.dart';
 import 'playlist_storage.dart';
 
@@ -22,12 +23,14 @@ class PlaylistSyncService extends ChangeNotifier {
     required MediaCacheService cache,
     required TokenStore tokenStore,
     required DeviceHeartbeatService heartbeat,
+    PlayerTelemetry? telemetry,
     PlaylistSyncDiagnostic? logDiagnostic,
   })  : _storage = storage,
         _api = api,
         _cache = cache,
         _tokenStore = tokenStore,
         _heartbeat = heartbeat,
+        _telemetry = telemetry,
         _logDiagnostic = logDiagnostic;
 
   final PlaylistStorage _storage;
@@ -35,6 +38,7 @@ class PlaylistSyncService extends ChangeNotifier {
   final MediaCacheService _cache;
   final TokenStore _tokenStore;
   final DeviceHeartbeatService _heartbeat;
+  final PlayerTelemetry? _telemetry;
   final PlaylistSyncDiagnostic? _logDiagnostic;
 
   List<PlaylistItem> _active = [];
@@ -124,73 +128,91 @@ class PlaylistSyncService extends ChangeNotifier {
       return;
     }
 
-    _cancelBackoffTimer();
+    _telemetry?.markSyncStarted();
+    var outcomeOk = false;
+    PlaylistBundle? outcomeBundle;
 
-    PlaylistBundle? remote;
     try {
-      remote = await _api.fetchPlaylist(deviceId);
-    } on AppAuthException catch (e) {
-      _log('sync stopped: session invalid (${e.message})');
-      return;
-    } catch (e, st) {
-      _log('sync network error: $e');
-      if (kDebugMode) debugPrint('$st');
-      _scheduleBackoffRetry();
-      return;
-    }
+      _cancelBackoffTimer();
 
-    if (remote == null) {
-      _log('sync: empty or failed response; keeping cached playback');
-      _scheduleBackoffRetry();
-      return;
-    }
+      PlaylistBundle? remote;
+      try {
+        remote = await _api.fetchPlaylist(deviceId);
+      } on AppAuthException catch (e) {
+        _log('sync stopped: session invalid (${e.message})');
+        return;
+      } catch (e, st) {
+        _log('sync network error: $e');
+        if (kDebugMode) debugPrint('$st');
+        _scheduleBackoffRetry();
+        return;
+      }
 
-    _backoffAttempt = 0;
+      if (remote == null) {
+        _log('sync: empty or failed response; keeping cached playback');
+        _scheduleBackoffRetry();
+        return;
+      }
 
-    final stored = _storage.load();
+      _backoffAttempt = 0;
 
-    final pastBoundary = _isPastStoredBoundary(stored);
-    if (remote.version == stored?.version && !pastBoundary) {
-      await _rebuildPlayableFromDiskIfChanged();
-      _scheduleBoundaryTimer(stored?.nextBoundaryUtc);
-      return;
-    }
+      final stored = _storage.load();
 
-    if (remote.items.isEmpty) {
-      _log('remote reported zero items; keeping last known good playback');
+      final pastBoundary = _isPastStoredBoundary(stored);
+      if (remote.version == stored?.version && !pastBoundary) {
+        await _rebuildPlayableFromDiskIfChanged();
+        _scheduleBoundaryTimer(stored?.nextBoundaryUtc);
+        outcomeOk = true;
+        outcomeBundle = stored;
+        return;
+      }
+
+      if (remote.items.isEmpty) {
+        _log('remote reported zero items; keeping last known good playback');
+        _scheduleBoundaryTimer(remote.nextBoundaryUtc);
+        outcomeOk = true;
+        outcomeBundle = remote;
+        return;
+      }
+
+      final playable = await _cache.prefetchAndFilter(remote.items);
+
+      if (remote.items.isNotEmpty && playable.isEmpty) {
+        _log(
+          'prefetch produced no playable items; keeping current loop',
+        );
+        _scheduleBoundaryTimer(remote.nextBoundaryUtc);
+        return;
+      }
+
+      await _storage.save(remote);
+
+      if (_active.isEmpty) {
+        _pendingPlayable = null;
+        _active = playable;
+        _epoch++;
+        notifyListeners();
+        _scheduleBoundaryTimer(remote.nextBoundaryUtc);
+        outcomeOk = true;
+        outcomeBundle = remote;
+        return;
+      }
+
+      if (_listIdentical(_active, playable)) {
+        _pendingPlayable = null;
+        _scheduleBoundaryTimer(remote.nextBoundaryUtc);
+        outcomeOk = true;
+        outcomeBundle = remote;
+        return;
+      }
+
+      _pendingPlayable = playable;
       _scheduleBoundaryTimer(remote.nextBoundaryUtc);
-      return;
+      outcomeOk = true;
+      outcomeBundle = remote;
+    } finally {
+      _telemetry?.markSyncOutcome(ok: outcomeOk, bundle: outcomeBundle);
     }
-
-    final playable = await _cache.prefetchAndFilter(remote.items);
-
-    if (remote.items.isNotEmpty && playable.isEmpty) {
-      _log(
-        'prefetch produced no playable items; keeping current loop',
-      );
-      _scheduleBoundaryTimer(remote.nextBoundaryUtc);
-      return;
-    }
-
-    await _storage.save(remote);
-
-    if (_active.isEmpty) {
-      _pendingPlayable = null;
-      _active = playable;
-      _epoch++;
-      notifyListeners();
-      _scheduleBoundaryTimer(remote.nextBoundaryUtc);
-      return;
-    }
-
-    if (_listIdentical(_active, playable)) {
-      _pendingPlayable = null;
-      _scheduleBoundaryTimer(remote.nextBoundaryUtc);
-      return;
-    }
-
-    _pendingPlayable = playable;
-    _scheduleBoundaryTimer(remote.nextBoundaryUtc);
   }
 
   bool _isPastStoredBoundary(PlaylistBundle? stored) {

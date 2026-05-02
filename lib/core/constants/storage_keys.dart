@@ -15,4 +15,10 @@ abstract final class StorageKeys {
 
   /// Cached playlist snapshot `{ version, items }` from sync.
   static const String playlistBundleJson = 'playlist_bundle_json';
+
+  /// ISO timestamps of recent fatal reports (for safe mode).
+  static const String fatalCrashLogJson = 'fatal_crash_log_json';
+
+  /// When true, UI stays in minimal recovery mode until cleared.
+  static const String safeMode = 'safe_mode';
 }

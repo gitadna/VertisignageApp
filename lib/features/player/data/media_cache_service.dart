@@ -104,6 +104,39 @@ class MediaCacheService {
     _pathByUrl.remove(url.trim());
   }
 
+  /// Deletes cached media files and clears the memo map (WebSocket CLEAR_CACHE).
+  Future<void> clearDiskCache() async {
+    _pathByUrl.clear();
+    try {
+      final dir = await _directory();
+      if (!await dir.exists()) return;
+      await for (final entity in dir.list()) {
+        try {
+          if (entity is File) await entity.delete();
+        } catch (_) {}
+      }
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('MediaCacheService.clearDiskCache: $e\n$st');
+      }
+    }
+  }
+
+  /// Approximate cache usage in megabytes (best-effort).
+  Future<int?> approximateCacheSizeMb() async {
+    try {
+      final dir = await _directory();
+      var total = 0;
+      if (!await dir.exists()) return 0;
+      await for (final e in dir.list(recursive: true)) {
+        if (e is File) total += await e.length();
+      }
+      return (total / (1024 * 1024)).round();
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Ensures each asset is cached where needed. URL slides pass http(s) validation only.
   Future<List<PlaylistItem>> prefetchAndFilter(List<PlaylistItem> items) async {
     final ready = <PlaylistItem>[];

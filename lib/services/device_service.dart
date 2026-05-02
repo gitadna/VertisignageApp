@@ -80,4 +80,19 @@ class DeviceService {
       /* ignore */
     }
   }
+
+  /// Launch package installer for a local APK path (Android). Returns false if channel fails.
+  Future<bool> installApk(String filePath) async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final ok = await _device.invokeMethod<bool>(
+        'installApk',
+        <String, dynamic>{'path': filePath},
+      );
+      return ok ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.installApk', e, st);
+      return false;
+    }
+  }
 }

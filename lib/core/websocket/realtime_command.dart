@@ -47,6 +47,38 @@ class RestartAppCommand extends RealtimeCommand {
   final String? reason;
 }
 
+class PingCommand extends RealtimeCommand {
+  const PingCommand({required this.messageId});
+
+  final String messageId;
+}
+
+class GetStatusCommand extends RealtimeCommand {
+  const GetStatusCommand({required this.messageId});
+
+  final String messageId;
+}
+
+class UpdateAppCommand extends RealtimeCommand {
+  const UpdateAppCommand({
+    required this.messageId,
+    required this.url,
+    required this.sha256,
+    required this.version,
+  });
+
+  final String messageId;
+  final String url;
+  final String sha256;
+  final String version;
+}
+
+class ClearCacheCommand extends RealtimeCommand {
+  const ClearCacheCommand({required this.messageId});
+
+  final String messageId;
+}
+
 /// JSON → typed command; unknown types return null (ignored).
 RealtimeCommand? parseRealtimeCommand(String raw) {
   try {
@@ -97,6 +129,36 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
           reason = payload['reason'] as String?;
         }
         return RestartAppCommand(reason: reason);
+      case 'PING':
+        if (payload is! Map<String, dynamic>) return null;
+        final mid = payload['messageId'] as String?;
+        if (mid == null) return null;
+        return PingCommand(messageId: mid);
+      case 'GET_STATUS':
+        if (payload is! Map<String, dynamic>) return null;
+        final mid = payload['messageId'] as String?;
+        if (mid == null) return null;
+        return GetStatusCommand(messageId: mid);
+      case 'UPDATE_APP':
+        if (payload is! Map<String, dynamic>) return null;
+        final mid = payload['messageId'] as String?;
+        final url = payload['url'] as String?;
+        final sha = payload['sha256'] as String?;
+        final ver = payload['version'] as String?;
+        if (mid == null || url == null || sha == null || ver == null) {
+          return null;
+        }
+        return UpdateAppCommand(
+          messageId: mid,
+          url: url,
+          sha256: sha,
+          version: ver,
+        );
+      case 'CLEAR_CACHE':
+        if (payload is! Map<String, dynamic>) return null;
+        final mid = payload['messageId'] as String?;
+        if (mid == null) return null;
+        return ClearCacheCommand(messageId: mid);
       default:
         return null;
     }

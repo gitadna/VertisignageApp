@@ -7,6 +7,9 @@ class EnvironmentConfig {
     required this.apiBaseUrl,
     required this.wsUrl,
     required this.kioskLockTask,
+    required this.enableRemoteLogShipping,
+    required this.enableOtaInstall,
+    required this.enableSafeMode,
   });
 
   /// --dart-define=APP_ENV=development|staging|production
@@ -27,6 +30,15 @@ class EnvironmentConfig {
 
   /// `--dart-define=KIOSK_LOCK_TASK=true` — Android screen pinning when supported.
   final bool kioskLockTask;
+
+  /// Ship structured logs to `/api/devices/:id/logs` (Phase 8).
+  final bool enableRemoteLogShipping;
+
+  /// Allow UPDATE_APP → download + package installer (Android).
+  final bool enableOtaInstall;
+
+  /// Enable crash counting → safe mode UI.
+  final bool enableSafeMode;
 
   bool get isProduction => environment == AppEnvironment.production;
 
@@ -54,15 +66,35 @@ class EnvironmentConfig {
       defaultValue: 'false',
     );
 
+    const remoteLogsRaw = String.fromEnvironment(
+      'ENABLE_REMOTE_LOGS',
+      defaultValue: 'true',
+    );
+    const otaRaw = String.fromEnvironment(
+      'ENABLE_OTA_INSTALL',
+      defaultValue: 'false',
+    );
+    const safeModeRaw = String.fromEnvironment(
+      'ENABLE_SAFE_MODE',
+      defaultValue: 'true',
+    );
+
     final api = apiRaw.trim();
     final ws = wsRaw.trim();
     final lockLower = lockRaw.trim().toLowerCase();
+    bool flag(String raw) {
+      final l = raw.trim().toLowerCase();
+      return l == 'true' || l == '1';
+    }
 
     return EnvironmentConfig(
       environment: env,
       apiBaseUrl: api.isEmpty ? apiDefault : api,
       wsUrl: ws.isEmpty ? wsDefault : ws,
       kioskLockTask: lockLower == 'true' || lockLower == '1',
+      enableRemoteLogShipping: flag(remoteLogsRaw),
+      enableOtaInstall: flag(otaRaw),
+      enableSafeMode: flag(safeModeRaw),
     );
   }
 
