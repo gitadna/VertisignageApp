@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../../core/errors/app_exception.dart';
 import '../../../models/device_identity.dart';
+import 'pairing_result.dart';
 
 /// REST pairing against `POST /api/devices/pair`.
 class PairingApi {
@@ -9,8 +10,8 @@ class PairingApi {
 
   final Dio _dio;
 
-  /// Completes pairing on the server and returns the persisted device record.
-  Future<DeviceIdentity> pairDevice(String pairingCode) async {
+  /// Completes pairing on the server; persists [PairingCompleteResult.accessToken] via [TokenStore].
+  Future<PairingCompleteResult> pairDevice(String pairingCode) async {
     final normalized = pairingCode.trim().toUpperCase();
     if (normalized.isEmpty) {
       throw const AppNetworkException('Pairing code is required');
@@ -40,7 +41,15 @@ class PairingApi {
         throw const AppParseException('Invalid device payload');
       }
 
-      return DeviceIdentity.fromApi(raw);
+      final token = raw['accessToken'] as String?;
+      if (token == null || token.isEmpty) {
+        throw const AppParseException('Pairing response missing access token');
+      }
+
+      return PairingCompleteResult(
+        identity: DeviceIdentity.fromApi(raw),
+        accessToken: token,
+      );
     } on DioException catch (e) {
       final mapped = _mapDioException(e);
       throw mapped;

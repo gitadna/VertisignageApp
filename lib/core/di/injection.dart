@@ -8,6 +8,7 @@ import '../websocket/realtime_client.dart';
 import '../websocket/websocket_realtime_client.dart';
 import '../../services/api_service.dart';
 import '../../services/auth_refresher.dart';
+import '../../services/device_service.dart';
 import '../../services/token_reader.dart';
 import '../../services/token_store.dart';
 import '../network/dio_provider.dart';
@@ -32,13 +33,19 @@ Future<void> configureDependencies() async {
   final dio = DioProvider.create(
     config: env,
     tokenReader: tokenStore,
+    tokenStore: tokenStore,
     authRefresher: sl<AuthRefresher>(),
   );
   sl.registerSingleton<Dio>(dio);
 
   sl.registerLazySingleton<ApiService>(() => ApiService(sl<Dio>()));
 
+  sl.registerLazySingleton<DeviceService>(DeviceService.new);
+
   sl.registerLazySingleton<RealtimeClient>(
-    () => WebSocketRealtimeClient(wsUrl: env.wsUrl),
+    () => WebSocketRealtimeClient(
+      wsBaseUrl: env.wsUrl,
+      tokenStore: tokenStore,
+    ),
   );
 }

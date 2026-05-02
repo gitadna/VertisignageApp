@@ -3,15 +3,22 @@ import 'dart:async';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../../services/token_store.dart';
 import '../constants/app_constants.dart';
 import '../utils/exponential_backoff.dart';
 import 'realtime_client.dart';
 
 /// [RealtimeClient] using [WebSocketChannel] with exponential backoff reconnect.
+/// Passes device JWT as `?token=` on each connection attempt (refreshes on reconnect).
 class WebSocketRealtimeClient implements RealtimeClient {
-  WebSocketRealtimeClient({required String wsUrl}) : _wsUrl = wsUrl;
+  WebSocketRealtimeClient({
+    required String wsBaseUrl,
+    required TokenStore tokenStore,
+  })  : _wsBaseUrl = wsBaseUrl,
+        _tokenStore = tokenStore;
 
-  final String _wsUrl;
+  final String _wsBaseUrl;
+  final TokenStore _tokenStore;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
@@ -24,6 +31,16 @@ class WebSocketRealtimeClient implements RealtimeClient {
   int _reconnectAttempt = 0;
   bool _userDisconnected = false;
   bool _connectInFlight = false;
+
+  Uri _buildUri() {
+    final base = Uri.parse(_wsBaseUrl);
+    final token = _tokenStore.accessToken;
+    final qp = Map<String, String>.from(base.queryParameters);
+    if (token != null && token.isNotEmpty) {
+      qp['token'] = token;
+    }
+    return base.replace(queryParameters: qp);
+  }
 
   @override
   Stream<RealtimeConnectionState> get connectionStates => _states.stream;
@@ -51,7 +68,7 @@ class WebSocketRealtimeClient implements RealtimeClient {
     _emit(RealtimeConnectionState.connecting);
     await _subscription?.cancel();
     try {
-      final uri = Uri.parse(_wsUrl);
+      final uri = _buildUri();
       _channel = WebSocketChannel.connect(uri);
       _subscription = _channel!.stream.listen(
         (dynamic data) {

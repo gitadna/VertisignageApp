@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../core/errors/app_exception.dart';
+import '../../../models/auth_session.dart';
 import '../../../models/device_identity.dart';
 import '../../../services/token_store.dart';
 import '../data/pairing_api.dart';
@@ -28,9 +29,12 @@ class PairingController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final identity = await _pairingApi.pairDevice(rawCode);
-      await _tokenStore.savePairedDevice(identity);
-      lastPaired = identity;
+      final result = await _pairingApi.pairDevice(rawCode);
+      await _tokenStore.saveSession(
+        AuthSession(accessToken: result.accessToken),
+      );
+      await _tokenStore.savePairedDevice(result.identity);
+      lastPaired = result.identity;
       phase = PairingPhase.success;
       notifyListeners();
     } on AppException catch (e) {

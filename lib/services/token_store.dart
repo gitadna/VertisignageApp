@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../core/constants/storage_keys.dart';
 import '../core/storage/local_storage.dart';
 import '../models/auth_session.dart';
@@ -7,7 +9,7 @@ import '../models/device_identity.dart';
 import 'token_reader.dart';
 
 /// Hive-backed token persistence implementing [TokenReader].
-class TokenStore implements TokenReader {
+class TokenStore extends ChangeNotifier implements TokenReader {
   TokenStore(this._storage);
 
   final LocalStorage _storage;
@@ -52,6 +54,7 @@ class TokenStore implements TokenReader {
         StorageKeys.accessTokenExpiresAt,
       );
     }
+    notifyListeners();
   }
 
   Future<void> saveSessionJson(Map<String, dynamic> json) async {
@@ -82,6 +85,7 @@ class TokenStore implements TokenReader {
 
   Future<void> clearAuth() async {
     await _storage.clearBox(StorageKeys.authBox);
+    notifyListeners();
   }
 
   /// Stores ad-hoc device metadata (legacy helper).
@@ -99,6 +103,7 @@ class TokenStore implements TokenReader {
       StorageKeys.pairedDeviceJson,
       jsonEncode(identity.toJson()),
     );
+    notifyListeners();
   }
 
   /// Sync read for startup gating and [hasPairedDevice].
@@ -120,5 +125,13 @@ class TokenStore implements TokenReader {
   bool get hasPairedDevice {
     final id = loadPairedDevice();
     return id != null && id.paired;
+  }
+
+  /// Clears device JWT, paired identity, and cached playlist after auth failure.
+  Future<void> invalidateDeviceSession() async {
+    await _storage.clearBox(StorageKeys.authBox);
+    await _storage.remove(StorageKeys.deviceBox, StorageKeys.pairedDeviceJson);
+    await _storage.remove(StorageKeys.deviceBox, StorageKeys.playlistBundleJson);
+    notifyListeners();
   }
 }

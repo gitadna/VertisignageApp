@@ -2,16 +2,22 @@ import 'package:dio/dio.dart';
 import 'package:get_it/get_it.dart';
 
 import '../../../core/storage/local_storage.dart';
+import '../../../core/websocket/realtime_client.dart';
+import '../../../kiosk/connectivity_coordinator.dart';
+import '../../../services/device_service.dart';
 import '../../../services/token_store.dart';
-import '../data/image_cache_service.dart';
+import '../data/device_heartbeat_service.dart';
+import '../data/emergency_overlay_notifier.dart';
+import '../data/media_cache_service.dart';
 import '../data/playlist_api.dart';
 import '../data/playlist_storage.dart';
 import '../data/playlist_sync_service.dart';
+import '../data/realtime_dispatcher.dart';
 import '../presentation/player_controller.dart';
 
 /// Player feature wiring (does not alter core DI).
 void registerPlayerModule(GetIt getIt) {
-  getIt.registerLazySingleton<ImageCacheService>(ImageCacheService.new);
+  getIt.registerLazySingleton<MediaCacheService>(MediaCacheService.new);
 
   getIt.registerLazySingleton<PlaylistStorage>(
     () => PlaylistStorage(getIt<LocalStorage>()),
@@ -19,19 +25,45 @@ void registerPlayerModule(GetIt getIt) {
 
   getIt.registerLazySingleton<PlaylistApi>(() => PlaylistApi(getIt<Dio>()));
 
+  getIt.registerLazySingleton<DeviceHeartbeatService>(
+    () => DeviceHeartbeatService(
+      dio: getIt<Dio>(),
+      tokenStore: getIt<TokenStore>(),
+    ),
+  );
+
   getIt.registerLazySingleton<PlaylistSyncService>(
     () => PlaylistSyncService(
       storage: getIt<PlaylistStorage>(),
       api: getIt<PlaylistApi>(),
-      cache: getIt<ImageCacheService>(),
+      cache: getIt<MediaCacheService>(),
       tokenStore: getIt<TokenStore>(),
+      heartbeat: getIt<DeviceHeartbeatService>(),
     ),
   );
 
   getIt.registerLazySingleton<PlayerController>(
     () => PlayerController(
-      cache: getIt<ImageCacheService>(),
+      cache: getIt<MediaCacheService>(),
       sync: getIt<PlaylistSyncService>(),
+    ),
+  );
+
+  getIt.registerLazySingleton<EmergencyOverlayNotifier>(
+    EmergencyOverlayNotifier.new,
+  );
+
+  getIt.registerLazySingleton<ConnectivityCoordinator>(
+    () => ConnectivityCoordinator(getIt<PlaylistSyncService>()),
+  );
+
+  getIt.registerLazySingleton<RealtimeDispatcher>(
+    () => RealtimeDispatcher(
+      realtime: getIt<RealtimeClient>(),
+      playlistSync: getIt<PlaylistSyncService>(),
+      emergencyOverlay: getIt<EmergencyOverlayNotifier>(),
+      tokenStore: getIt<TokenStore>(),
+      device: getIt<DeviceService>(),
     ),
   );
 }

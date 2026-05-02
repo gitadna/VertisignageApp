@@ -9,14 +9,15 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../models/playlist_item.dart';
 
-/// Downloads remote images into app support storage; memoizes URL → path in memory.
-class ImageCacheService {
-  ImageCacheService({Dio? downloadClient})
+/// Downloads remote images/videos into app support storage; memoizes URL → path.
+/// URL-type playlist rows skip downloads (handled only in [prefetchAndFilter]).
+class MediaCacheService {
+  MediaCacheService({Dio? downloadClient})
       : _dio = downloadClient ??
             Dio(
               BaseOptions(
-                connectTimeout: const Duration(seconds: 30),
-                receiveTimeout: const Duration(seconds: 60),
+                connectTimeout: const Duration(seconds: 45),
+                receiveTimeout: const Duration(minutes: 15),
                 responseType: ResponseType.bytes,
               ),
             );
@@ -28,7 +29,7 @@ class ImageCacheService {
   Future<Directory> _directory() async {
     if (_cacheDir != null) return _cacheDir!;
     final root = await getApplicationSupportDirectory();
-    final dir = Directory(p.join(root.path, 'image_cache'));
+    final dir = Directory(p.join(root.path, 'media_cache'));
     await dir.create(recursive: true);
     _cacheDir = dir;
     return dir;
@@ -76,7 +77,7 @@ class ImageCacheService {
       return file.path;
     } catch (e, st) {
       if (kDebugMode) {
-        debugPrint('ImageCacheService: failed for $url — $e\n$st');
+        debugPrint('MediaCacheService: failed for $url — $e\n$st');
       }
       return null;
     }
@@ -89,6 +90,9 @@ class ImageCacheService {
 
   String _extensionGuess(String url) {
     final lower = url.toLowerCase();
+    if (lower.contains('.mp4')) return '.mp4';
+    if (lower.contains('.webm')) return '.webm';
+    if (lower.contains('.mov')) return '.mov';
     if (lower.contains('.png')) return '.png';
     if (lower.contains('.webp')) return '.webp';
     if (lower.contains('.gif')) return '.gif';
@@ -100,13 +104,22 @@ class ImageCacheService {
     _pathByUrl.remove(url.trim());
   }
 
-  /// Downloads each asset once (with existing retry policy); keeps items whose file resolved.
+  /// Ensures each asset is cached where needed. URL slides pass http(s) validation only.
   Future<List<PlaylistItem>> prefetchAndFilter(List<PlaylistItem> items) async {
     final ready = <PlaylistItem>[];
     for (final item in items) {
-      final path = await resolveLocalPath(item.url);
-      if (path != null) {
-        ready.add(item);
+      if (item.mediaKind == PlaylistMediaKind.url) {
+        final uri = Uri.tryParse(item.url.trim());
+        if (uri != null &&
+            uri.hasAuthority &&
+            (uri.isScheme('https') || uri.isScheme('http'))) {
+          ready.add(item);
+        }
+      } else {
+        final path = await resolveLocalPath(item.url);
+        if (path != null) {
+          ready.add(item);
+        }
       }
     }
     return ready;

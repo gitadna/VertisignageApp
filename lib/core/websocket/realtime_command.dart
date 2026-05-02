@@ -1,0 +1,106 @@
+import 'dart:convert';
+
+/// Parsed server push (`{ "type", "payload" }`).
+sealed class RealtimeCommand {
+  const RealtimeCommand();
+}
+
+class PlaylistUpdatedCommand extends RealtimeCommand {
+  const PlaylistUpdatedCommand({this.playlistId});
+
+  final String? playlistId;
+}
+
+class SyncRequestCommand extends RealtimeCommand {
+  const SyncRequestCommand();
+}
+
+class EmergencyAlertCommand extends RealtimeCommand {
+  const EmergencyAlertCommand({
+    required this.alertId,
+    required this.alertType,
+    required this.title,
+    required this.message,
+  });
+
+  final String alertId;
+  final String alertType;
+  final String title;
+  final String message;
+}
+
+class AlertResolvedCommand extends RealtimeCommand {
+  const AlertResolvedCommand({required this.alertId});
+
+  final String alertId;
+}
+
+class VolumeSetCommand extends RealtimeCommand {
+  const VolumeSetCommand({required this.volume});
+
+  final int volume;
+}
+
+class RestartAppCommand extends RealtimeCommand {
+  const RestartAppCommand({this.reason});
+
+  final String? reason;
+}
+
+/// JSON → typed command; unknown types return null (ignored).
+RealtimeCommand? parseRealtimeCommand(String raw) {
+  try {
+    final dynamic decoded = jsonDecode(raw);
+    if (decoded is! Map) return null;
+    final decodedMap = Map<String, dynamic>.from(decoded);
+    final type = decodedMap['type'] as String?;
+    final payload = decodedMap['payload'];
+    if (type == null) return null;
+
+    switch (type) {
+      case 'PLAYLIST_UPDATED':
+        final m = payload is Map<String, dynamic> ? payload : null;
+        return PlaylistUpdatedCommand(
+          playlistId: m?['playlistId'] as String?,
+        );
+      case 'SYNC_REQUEST':
+      case 'SCHEDULE_UPDATED':
+        return const SyncRequestCommand();
+      case 'EMERGENCY_ALERT':
+        if (payload is! Map<String, dynamic>) return null;
+        final aid = payload['alertId'] as String?;
+        final at = payload['alertType'] as String?;
+        final title = payload['title'] as String?;
+        final message = payload['message'] as String?;
+        if (aid == null || at == null || title == null || message == null) {
+          return null;
+        }
+        return EmergencyAlertCommand(
+          alertId: aid,
+          alertType: at,
+          title: title,
+          message: message,
+        );
+      case 'ALERT_RESOLVED':
+        if (payload is! Map<String, dynamic>) return null;
+        final aid = payload['alertId'] as String?;
+        if (aid == null) return null;
+        return AlertResolvedCommand(alertId: aid);
+      case 'VOLUME_SET':
+        if (payload is! Map<String, dynamic>) return null;
+        final v = payload['volume'];
+        if (v is! num) return null;
+        return VolumeSetCommand(volume: v.round().clamp(0, 100));
+      case 'RESTART_APP':
+        String? reason;
+        if (payload is Map<String, dynamic>) {
+          reason = payload['reason'] as String?;
+        }
+        return RestartAppCommand(reason: reason);
+      default:
+        return null;
+    }
+  } on FormatException {
+    return null;
+  }
+}

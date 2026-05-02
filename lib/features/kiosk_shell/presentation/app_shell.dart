@@ -19,17 +19,27 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   PairingController? _pairingController;
 
+  late final TokenStore _tokenStore = sl<TokenStore>();
+
   @override
   void initState() {
     super.initState();
-    if (!sl<TokenStore>().hasPairedDevice) {
+    _tokenStore.addListener(_onTokenStoreChanged);
+    if (!_tokenStore.hasPairedDevice) {
+      _pairingController = sl<PairingController>()..addListener(_onPairingChanged);
+    }
+  }
+
+  void _onTokenStoreChanged() {
+    setState(() {});
+    if (!_tokenStore.hasPairedDevice && _pairingController == null) {
       _pairingController = sl<PairingController>()..addListener(_onPairingChanged);
     }
   }
 
   void _onPairingChanged() {
     setState(() {});
-    final store = sl<TokenStore>();
+    final store = _tokenStore;
     if (_pairingController != null && store.hasPairedDevice) {
       final toDispose = _pairingController!;
       toDispose.removeListener(_onPairingChanged);
@@ -42,6 +52,7 @@ class _AppShellState extends State<AppShell> {
 
   @override
   void dispose() {
+    _tokenStore.removeListener(_onTokenStoreChanged);
     final c = _pairingController;
     if (c != null) {
       c.removeListener(_onPairingChanged);
@@ -52,7 +63,7 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    final store = sl<TokenStore>();
+    final store = _tokenStore;
     if (store.hasPairedDevice) {
       return PlayerScreen(controller: sl<PlayerController>());
     }

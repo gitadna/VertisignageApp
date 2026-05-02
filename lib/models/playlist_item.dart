@@ -1,34 +1,71 @@
-/// Minimal playlist entry for kiosk playback (single-type assets for now).
+/// Typed kiosk playlist row (`image` | `video` | `url` from API `type`).
+enum PlaylistMediaKind {
+  image,
+  video,
+  url;
+
+  static PlaylistMediaKind parse(String? raw) {
+    switch ((raw ?? 'image').toLowerCase()) {
+      case 'video':
+        return PlaylistMediaKind.video;
+      case 'url':
+        return PlaylistMediaKind.url;
+      default:
+        return PlaylistMediaKind.image;
+    }
+  }
+
+  /// Serialized `type` field for JSON bodies.
+  String get wireValue => switch (this) {
+        PlaylistMediaKind.image => 'image',
+        PlaylistMediaKind.video => 'video',
+        PlaylistMediaKind.url => 'url',
+      };
+}
+
+/// Playlist entry from `GET /api/devices/:id/playlist`.
 class PlaylistItem {
   const PlaylistItem({
     required this.id,
-    required this.type,
+    required this.mediaKind,
     required this.url,
     required this.durationMs,
     required this.order,
+    this.muted = false,
+    this.transition = 'fade',
   });
 
   final String id;
-  final String type;
+  final PlaylistMediaKind mediaKind;
   final String url;
   final int durationMs;
   final int order;
 
+  /// Applies to video playback (playlist row default from CMS).
+  final bool muted;
+
+  /// CMS transition id (phase 5 supports `fade` only in UI).
+  final String transition;
+
   Map<String, dynamic> toJson() => {
         'id': id,
-        'type': type,
+        'type': mediaKind.wireValue,
         'url': url,
         'durationMs': durationMs,
         'order': order,
+        'muted': muted,
+        'transition': transition,
       };
 
   factory PlaylistItem.fromJson(Map<String, dynamic> json) {
     return PlaylistItem(
       id: json['id'] as String? ?? '',
-      type: json['type'] as String? ?? 'image',
+      mediaKind: PlaylistMediaKind.parse(json['type'] as String?),
       url: json['url'] as String? ?? '',
       durationMs: (json['durationMs'] as num?)?.toInt() ?? 10000,
       order: (json['order'] as num?)?.toInt() ?? 0,
+      muted: json['muted'] as bool? ?? false,
+      transition: (json['transition'] as String?)?.toLowerCase() ?? 'fade',
     );
   }
 }
