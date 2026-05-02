@@ -14,6 +14,7 @@ class ConnectivityCoordinator {
   final Connectivity _connectivity = Connectivity();
 
   StreamSubscription<List<ConnectivityResult>>? _sub;
+  Timer? _debounce;
   List<ConnectivityResult> _last = const [ConnectivityResult.none];
 
   Future<void> start() async {
@@ -31,7 +32,10 @@ class ConnectivityCoordinator {
         final online = _isOnline(results);
         if (wasOffline && online) {
           KioskLog.d('Connectivity', 'back online — sync');
-          unawaited(_sync.sync());
+          _debounce?.cancel();
+          _debounce = Timer(const Duration(milliseconds: 1500), () {
+            unawaited(_sync.sync());
+          });
         }
       },
       onError: (Object e, StackTrace st) {
@@ -50,6 +54,8 @@ class ConnectivityCoordinator {
   }
 
   void dispose() {
+    _debounce?.cancel();
+    _debounce = null;
     final s = _sub;
     _sub = null;
     if (s != null) {

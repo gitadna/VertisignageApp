@@ -17,6 +17,7 @@ class RemoteLogUploader {
 
   final Queue<Map<String, dynamic>> _queue = Queue<Map<String, dynamic>>();
   Timer? _flushTimer;
+  Timer? _retryTimer;
   bool _flushing = false;
 
   static const int _maxQueued = 400;
@@ -55,23 +56,41 @@ class RemoteLogUploader {
   Future<void> _flush() async {
     if (_flushing || _queue.isEmpty) return;
     _flushing = true;
+    var ok = true;
     try {
       final batch = <Map<String, dynamic>>[];
       while (batch.length < _batchSize && _queue.isNotEmpty) {
         batch.add(_queue.removeFirst());
       }
-      await _api.postLogs(batch);
+      ok = await _api.postLogs(batch);
+      if (!ok && batch.isNotEmpty) {
+        for (final item in batch.reversed) {
+          _queue.addFirst(item);
+        }
+      }
     } finally {
       _flushing = false;
-      if (_queue.isNotEmpty) {
+      if (_queue.isEmpty) return;
+      if (!ok) {
+        _scheduleRetryFlush();
+      } else {
         unawaited(_flush());
       }
     }
   }
 
+  void _scheduleRetryFlush() {
+    _retryTimer ??= Timer(const Duration(seconds: 15), () {
+      _retryTimer = null;
+      unawaited(_flush());
+    });
+  }
+
   void dispose() {
     _flushTimer?.cancel();
     _flushTimer = null;
+    _retryTimer?.cancel();
+    _retryTimer = null;
     unawaited(_flush());
   }
 }

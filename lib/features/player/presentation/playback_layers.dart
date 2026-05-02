@@ -194,6 +194,22 @@ class _WebSlideLayerState extends State<WebSlideLayer> {
     _armWatchdog();
   }
 
+  @override
+  void didUpdateWidget(WebSlideLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.uri != widget.uri) {
+      _reloadAttempts = 0;
+      _successSent = false;
+      _failSent = false;
+      _watchdog?.cancel();
+      final c = _controller;
+      if (c != null) {
+        unawaited(c.loadRequest(widget.uri));
+      }
+      _armWatchdog();
+    }
+  }
+
   void _createController() {
     final wc = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)

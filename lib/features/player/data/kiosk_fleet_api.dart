@@ -13,18 +13,23 @@ class KioskFleetApi {
   final Dio _dio;
   final TokenStore _tokenStore;
 
-  Future<void> postLogs(List<Map<String, dynamic>> logs) async {
+  /// Returns `true` if the batch was accepted (2xx).
+  Future<bool> postLogs(List<Map<String, dynamic>> logs) async {
     final device = _tokenStore.loadPairedDevice();
     final token = _tokenStore.accessToken;
     if (device == null || token == null || token.isEmpty || logs.isEmpty) {
-      return;
+      return false;
     }
     try {
-      await _dio.post<void>(
+      final res = await _dio.post<void>(
         '/api/devices/${device.deviceId}/logs',
         data: <String, dynamic>{'logs': logs},
       );
-    } catch (_) {}
+      final code = res.statusCode ?? 0;
+      return code >= 200 && code < 300;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> postCommandAck({

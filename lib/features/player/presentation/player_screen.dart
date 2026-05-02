@@ -52,7 +52,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
-    sl<RealtimeDispatcher>().dispose();
+    // RealtimeDispatcher is a process-wide singleton; do not dispose here —
+    // SafeModeScreen <-> PlayerScreen transitions would unsubscribe WS commands.
     sl<RealtimeClient>().disconnect();
     widget.controller.stop();
     super.dispose();

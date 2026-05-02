@@ -10,6 +10,7 @@ class EnvironmentConfig {
     required this.enableRemoteLogShipping,
     required this.enableOtaInstall,
     required this.enableSafeMode,
+    required this.maxMediaCacheMb,
   });
 
   /// --dart-define=APP_ENV=development|staging|production
@@ -39,6 +40,9 @@ class EnvironmentConfig {
 
   /// Enable crash counting → safe mode UI.
   final bool enableSafeMode;
+
+  /// Max approximate media cache size (MB) before pruning oldest files.
+  final int maxMediaCacheMb;
 
   bool get isProduction => environment == AppEnvironment.production;
 
@@ -79,6 +83,11 @@ class EnvironmentConfig {
       defaultValue: 'true',
     );
 
+    const cacheMbRaw = String.fromEnvironment(
+      'MAX_MEDIA_CACHE_MB',
+      defaultValue: '2048',
+    );
+
     final api = apiRaw.trim();
     final ws = wsRaw.trim();
     final lockLower = lockRaw.trim().toLowerCase();
@@ -86,6 +95,8 @@ class EnvironmentConfig {
       final l = raw.trim().toLowerCase();
       return l == 'true' || l == '1';
     }
+
+    final cacheMb = int.tryParse(cacheMbRaw.trim()) ?? 2048;
 
     return EnvironmentConfig(
       environment: env,
@@ -95,6 +106,7 @@ class EnvironmentConfig {
       enableRemoteLogShipping: flag(remoteLogsRaw),
       enableOtaInstall: flag(otaRaw),
       enableSafeMode: flag(safeModeRaw),
+      maxMediaCacheMb: cacheMb.clamp(128, 8192).toInt(),
     );
   }
 

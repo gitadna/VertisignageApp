@@ -12,8 +12,10 @@ import '../../../models/playlist_item.dart';
 /// Downloads remote images/videos into app support storage; memoizes URL → path.
 /// URL-type playlist rows skip downloads (handled only in [prefetchAndFilter]).
 class MediaCacheService {
-  MediaCacheService({Dio? downloadClient})
-      : _dio = downloadClient ??
+  MediaCacheService({
+    Dio? downloadClient,
+    this.maxCacheMb = 2048,
+  }) : _dio = downloadClient ??
             Dio(
               BaseOptions(
                 connectTimeout: const Duration(seconds: 45),
@@ -23,6 +25,8 @@ class MediaCacheService {
             );
 
   final Dio _dio;
+  final int maxCacheMb;
+
   final Map<String, String> _pathByUrl = {};
   Directory? _cacheDir;
 
@@ -74,12 +78,51 @@ class MediaCacheService {
       final file = File(p.join(dir.path, name));
       await file.writeAsBytes(bytes, flush: true);
       if (!await file.exists()) return null;
+      await _enforceBudgetIfNeeded();
       return file.path;
     } catch (e, st) {
       if (kDebugMode) {
         debugPrint('MediaCacheService: failed for $url — $e\n$st');
       }
       return null;
+    }
+  }
+
+  Future<void> _enforceBudgetIfNeeded() async {
+    final budgetBytes = maxCacheMb * 1024 * 1024;
+    try {
+      final dir = await _directory();
+      if (!await dir.exists()) return;
+
+      final files = <File>[];
+      await for (final e in dir.list()) {
+        if (e is File) files.add(e);
+      }
+      var total = 0;
+      for (final f in files) {
+        total += await f.length();
+      }
+      if (total <= budgetBytes) return;
+
+      files.sort((a, b) {
+        final ta = a.statSync().modified;
+        final tb = b.statSync().modified;
+        return ta.compareTo(tb);
+      });
+
+      for (final f in files) {
+        if (total <= budgetBytes) break;
+        try {
+          final len = await f.length();
+          await f.delete();
+          total -= len;
+          _pathByUrl.removeWhere((_, path) => path == f.path);
+        } catch (_) {}
+      }
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('MediaCacheService._enforceBudgetIfNeeded: $e\n$st');
+      }
     }
   }
 
