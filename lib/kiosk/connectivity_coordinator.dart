@@ -5,7 +5,6 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../core/logging/kiosk_log.dart';
 import '../features/player/data/playlist_sync_service.dart';
 
-/// Triggers playlist sync when connectivity returns after offline.
 class ConnectivityCoordinator {
   ConnectivityCoordinator(this._sync);
 
