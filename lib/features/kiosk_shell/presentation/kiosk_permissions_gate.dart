@@ -11,7 +11,7 @@
   import 'package:flutter/foundation.dart';
   import 'package:package_info_plus/package_info_plus.dart';
 
-  /// Android-first-run: overlay + ignore battery optimizations so WebSocket sync and overlays survive OEM policies.
+
   class KioskPermissionsGate extends StatefulWidget {
     const KioskPermissionsGate({super.key, required this.child});
 
@@ -251,4 +251,4 @@
         ),
       );
     }
-  }
+  } 
