@@ -3,6 +3,7 @@ class DeviceIdentity {
   const DeviceIdentity({
     required this.deviceId,
     required this.orgId,
+    this.licenseId,
     this.groupId,
     this.name,
     this.location,
@@ -11,6 +12,7 @@ class DeviceIdentity {
 
   final String deviceId;
   final String orgId;
+  final String? licenseId;
   final String? groupId;
   final String? name;
   final String? location;
@@ -26,6 +28,7 @@ class DeviceIdentity {
     return DeviceIdentity(
       deviceId: id,
       orgId: org,
+      licenseId: json['licenseId'] as String? ?? json['pairingCode'] as String?,
       groupId: json['groupId'] as String?,
       name: json['name'] as String?,
       location: json['location'] as String?,
@@ -36,6 +39,7 @@ class DeviceIdentity {
   Map<String, dynamic> toJson() => {
         'deviceId': deviceId,
         'orgId': orgId,
+        'licenseId': licenseId,
         'groupId': groupId,
         'name': name,
         'location': location,
@@ -51,6 +55,7 @@ class DeviceIdentity {
     return DeviceIdentity(
       deviceId: deviceId,
       orgId: orgId,
+      licenseId: json['licenseId'] as String? ?? json['pairingCode'] as String?,
       groupId: json['groupId'] as String?,
       name: json['name'] as String?,
       location: json['location'] as String?,

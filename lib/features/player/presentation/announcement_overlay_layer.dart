@@ -16,7 +16,7 @@ class AnnouncementOverlayLayer extends StatelessWidget {
       listenable: sl<AnnouncementOverlayNotifier>(),
       builder: (context, _) {
         final n = sl<AnnouncementOverlayNotifier>();
-        if (!n.isActive) {
+        if (!n.isActive || n.mode != AnnouncementRenderMode.overlay) {
           return const SizedBox.shrink();
         }
 
@@ -27,6 +27,9 @@ class AnnouncementOverlayLayer extends StatelessWidget {
             ),
             kind: n.mediaKind,
             url: n.mediaUrl,
+            title: n.title,
+            body: n.body,
+            untilDismissed: n.untilDismissed,
           ),
         );
       },
@@ -39,10 +42,16 @@ class _AnnouncementMediaFill extends StatefulWidget {
     super.key,
     required this.kind,
     required this.url,
+    required this.title,
+    required this.body,
+    required this.untilDismissed,
   });
 
   final AnnouncementMediaKind kind;
   final String? url;
+  final String title;
+  final String? body;
+  final bool untilDismissed;
 
   @override
   State<_AnnouncementMediaFill> createState() => _AnnouncementMediaFillState();
@@ -50,6 +59,7 @@ class _AnnouncementMediaFill extends StatefulWidget {
 
 class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
   VideoPlayerController? _video;
+  bool _videoFailed = false;
 
   @override
   void initState() {
@@ -64,7 +74,9 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
   Future<void> _initVideo() async {
     final uri = Uri.tryParse(widget.url!);
     if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
-      if (mounted) sl<AnnouncementOverlayNotifier>().dismissManual();
+      if (mounted) {
+        setState(() => _videoFailed = true);
+      }
       return;
     }
     final c = VideoPlayerController.networkUrl(uri);
@@ -74,7 +86,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         await c.dispose();
         return;
       }
-      await c.setLooping(false);
+      await c.setLooping(widget.untilDismissed);
       await c.setVolume(1);
       _video = c;
       c.addListener(_onVideoTick);
@@ -82,7 +94,9 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
       await c.play();
     } catch (_) {
       await c.dispose();
-      if (mounted) sl<AnnouncementOverlayNotifier>().dismissManual();
+      if (mounted) {
+        setState(() => _videoFailed = true);
+      }
     }
   }
 
@@ -92,9 +106,10 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     final v = c.value;
     if (v.hasError) {
       c.removeListener(_onVideoTick);
-      sl<AnnouncementOverlayNotifier>().dismissManual();
+      setState(() => _videoFailed = true);
       return;
     }
+    if (widget.untilDismissed) return;
     if (!v.isInitialized || v.duration == Duration.zero) return;
     if (v.position >= v.duration - const Duration(milliseconds: 120)) {
       c.removeListener(_onVideoTick);
@@ -118,14 +133,18 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
 
     if (widget.kind == AnnouncementMediaKind.video &&
         url != null &&
-        url.isNotEmpty) {
+        url.isNotEmpty &&
+        !_videoFailed) {
       final c = _video;
       if (c != null && c.value.isInitialized) {
         final sz = c.value.size;
         final w = sz.width;
         final h = sz.height;
         if (w <= 0 || h <= 0) {
-          return const ColoredBox(color: Colors.black);
+          return _AnnouncementFallback(
+            title: widget.title,
+            body: widget.body,
+          );
         }
         return ColoredBox(
           color: Colors.black,
@@ -141,7 +160,17 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
           ),
         );
       }
-      return const ColoredBox(color: Colors.black);
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Colors.black),
+          Center(
+            child: CircularProgressIndicator(
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ],
+      );
     }
 
     if (widget.kind == AnnouncementMediaKind.image &&
@@ -153,7 +182,10 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
           child: Image.network(
             url,
             fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black),
+            errorBuilder: (_, _, _) => _AnnouncementFallback(
+              title: widget.title,
+              body: widget.body,
+            ),
             loadingBuilder: (ctx, child, progress) {
               if (progress == null) return child;
               return Center(
@@ -167,6 +199,76 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
       );
     }
 
-    return const ColoredBox(color: Colors.black);
+    return _AnnouncementFallback(
+      title: widget.title,
+      body: widget.body,
+    );
+  }
+}
+
+class _AnnouncementFallback extends StatelessWidget {
+  const _AnnouncementFallback({
+    required this.title,
+    required this.body,
+  });
+
+  final String title;
+  final String? body;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Colors.black,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white24),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.campaign_outlined,
+                      color: Colors.white70,
+                      size: 40,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      title.trim().isEmpty ? 'Announcement' : title,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (body != null && body!.trim().isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        body!.trim(),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 18,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

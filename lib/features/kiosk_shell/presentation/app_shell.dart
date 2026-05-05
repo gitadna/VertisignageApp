@@ -21,6 +21,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   PairingController? _pairingController;
+  bool _triedAutoRecover = false;
 
   late final TokenStore _tokenStore = sl<TokenStore>();
 
@@ -30,6 +31,7 @@ class _AppShellState extends State<AppShell> {
     _tokenStore.addListener(_onTokenStoreChanged);
     if (!_tokenStore.hasPairedDevice) {
       _pairingController = sl<PairingController>()..addListener(_onPairingChanged);
+      _attemptAutoRecover();
     }
   }
 
@@ -37,7 +39,20 @@ class _AppShellState extends State<AppShell> {
     setState(() {});
     if (!_tokenStore.hasPairedDevice && _pairingController == null) {
       _pairingController = sl<PairingController>()..addListener(_onPairingChanged);
+      _attemptAutoRecover();
     }
+  }
+
+  void _attemptAutoRecover() {
+    if (_triedAutoRecover) return;
+    final c = _pairingController;
+    if (c == null) return;
+    _triedAutoRecover = true;
+    if (_tokenStore.savedLicenseId != null && _tokenStore.savedDeviceName != null) {
+      c.recoverFromSavedLicense();
+      return;
+    }
+    c.recoverFromFingerprint();
   }
 
   void _onPairingChanged() {

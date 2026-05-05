@@ -62,7 +62,10 @@ class PlayerKioskOverlay extends StatelessWidget {
                           onInteract();
                           onPrevious();
                         },
-                        icon: Icon(Icons.skip_previous_rounded, color: cs.onSurface),
+                        icon: Icon(
+                          Icons.skip_previous_rounded,
+                          color: cs.onSurface,
+                        ),
                       ),
                       IconButton(
                         tooltip: isPaused ? 'Play' : 'Pause',
@@ -84,7 +87,10 @@ class PlayerKioskOverlay extends StatelessWidget {
                           onInteract();
                           onNext();
                         },
-                        icon: Icon(Icons.skip_next_rounded, color: cs.onSurface),
+                        icon: Icon(
+                          Icons.skip_next_rounded,
+                          color: cs.onSurface,
+                        ),
                       ),
                     ],
                   ),
@@ -93,44 +99,44 @@ class PlayerKioskOverlay extends StatelessWidget {
                     alignment: WrapAlignment.center,
                     spacing: AppSpacing.s1,
                     runSpacing: AppSpacing.s1,
-                    children: [
-                      TextButton.icon(
-                        onPressed: () {
-                          onInteract();
-                          onClearCache();
-                        },
-                        icon: Icon(Icons.delete_outline_rounded,
-                            size: 18, color: cs.onSurfaceVariant),
-                        label: Text(
-                          'Clear cache',
-                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
-                        ),
-                      ),
-                      TextButton.icon(
-                        onPressed: () {
-                          onInteract();
-                          onRepair();
-                        },
-                        icon: Icon(Icons.phonelink_setup_rounded,
-                            size: 18, color: cs.onSurfaceVariant),
-                        label: Text(
-                          'Pair again',
-                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
-                        ),
-                      ),
-                      TextButton.icon(
-                        onPressed: () {
-                          onInteract();
-                          onResetApp();
-                        },
-                        icon: Icon(Icons.restart_alt_rounded,
-                            size: 18, color: cs.onSurfaceVariant),
-                        label: Text(
-                          'Reset app',
-                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
-                        ),
-                      ),
-                    ],
+                    // children: [
+                    //   TextButton.icon(
+                    //     onPressed: () {
+                    //       onInteract();
+                    //       onClearCache();
+                    //     },
+                    //     icon: Icon(Icons.delete_outline_rounded,
+                    //         size: 18, color: cs.onSurfaceVariant),
+                    //     label: Text(
+                    //       'Clear cache',
+                    //       style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+                    //     ),
+                    //   ),
+                    //   TextButton.icon(
+                    //     onPressed: () {
+                    //       onInteract();
+                    //       onRepair();
+                    //     },
+                    //     icon: Icon(Icons.phonelink_setup_rounded,
+                    //         size: 18, color: cs.onSurfaceVariant),
+                    //     label: Text(
+                    //       'Pair again',
+                    //       style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+                    //     ),
+                    //   ),
+                    //   TextButton.icon(
+                    //     onPressed: () {
+                    //       onInteract();
+                    //       onResetApp();
+                    //     },
+                    //     icon: Icon(Icons.restart_alt_rounded,
+                    //         size: 18, color: cs.onSurfaceVariant),
+                    //     label: Text(
+                    //       'Reset app',
+                    //       style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+                    //     ),
+                    //   ),
+                    // ],
                   ),
                 ],
               ),

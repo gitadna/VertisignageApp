@@ -9,6 +9,7 @@ import '../../../core/constants/storage_keys.dart';
 import '../../../core/storage/local_storage.dart';
 import '../../../core/utils/exponential_backoff.dart';
 import '../../../services/token_store.dart';
+import '../../../services/device_service.dart';
 import 'media_cache_service.dart';
 import 'player_telemetry.dart';
 
@@ -19,12 +20,14 @@ class DeviceHeartbeatService {
     required TokenStore tokenStore,
     required PlayerTelemetry telemetry,
     required MediaCacheService cache,
+    required DeviceService device,
     required LocalStorage storage,
     Duration interval = const Duration(seconds: 45),
   })  : _dio = dio,
         _tokenStore = tokenStore,
         _telemetry = telemetry,
         _cache = cache,
+        _device = device,
         _storage = storage,
         _interval = interval;
 
@@ -32,6 +35,7 @@ class DeviceHeartbeatService {
   final TokenStore _tokenStore;
   final PlayerTelemetry _telemetry;
   final MediaCacheService _cache;
+  final DeviceService _device;
   final LocalStorage _storage;
   final Duration _interval;
 
@@ -161,6 +165,8 @@ class DeviceHeartbeatService {
     if (pid != null) body['currentPlaylistId'] = pid;
     final sid = _telemetry.currentScheduleId;
     if (sid != null) body['currentScheduleId'] = sid;
+    body['supportsWakeRelay'] = true;
+    body['supportsOverlay'] = true;
     return body;
   }
 
@@ -171,6 +177,7 @@ class DeviceHeartbeatService {
     try {
       final cacheMb = await _cache.approximateCacheSizeMb();
       final payload = Map<String, dynamic>.from(data);
+      payload['overlayPermissionGranted'] = await _device.canDrawOverlays();
       if (cacheMb != null) {
         payload['cacheUsedMb'] = cacheMb;
       }

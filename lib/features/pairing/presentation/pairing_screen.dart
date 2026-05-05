@@ -15,10 +15,12 @@ class PairingScreen extends StatefulWidget {
 }
 
 class _PairingScreenState extends State<PairingScreen> {
+  final TextEditingController _deviceNameController = TextEditingController();
   final TextEditingController _codeController = TextEditingController();
 
   @override
   void dispose() {
+    _deviceNameController.dispose();
     _codeController.dispose();
     super.dispose();
   }
@@ -62,7 +64,7 @@ class _PairingScreenState extends State<PairingScreen> {
                         ),
                         const SizedBox(height: AppSpacing.s2),
                         Text(
-                          'Enter the pairing code from your Vertisignage console.',
+                          'Enter device name and license ID from your Vertisignage console.',
                           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                 color: secondary,
                               ),
@@ -70,21 +72,36 @@ class _PairingScreenState extends State<PairingScreen> {
                         ),
                         const SizedBox(height: AppSpacing.s8),
                         TextField(
+                          controller: _deviceNameController,
+                          enabled: !loading,
+                          decoration: const InputDecoration(
+                            labelText: 'Device name',
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.s4),
+                        TextField(
                           controller: _codeController,
                           enabled: !loading,
                           decoration: const InputDecoration(
-                            labelText: 'Pairing code',
+                            labelText: 'License ID',
                           ),
                           textCapitalization: TextCapitalization.characters,
-                          onSubmitted:
-                              loading ? null : (_) => c.submit(_codeController.text),
+                          onSubmitted: loading
+                              ? null
+                              : (_) => c.submit(
+                                    rawLicenseId: _codeController.text,
+                                    rawDeviceName: _deviceNameController.text,
+                                  ),
                         ),
                         const SizedBox(height: AppSpacing.s4),
                         FilledButton(
                           onPressed: loading
                               ? null
-                              : () => c.submit(_codeController.text),
-                          child: const Text('Pair'),
+                              : () => c.submit(
+                                    rawLicenseId: _codeController.text,
+                                    rawDeviceName: _deviceNameController.text,
+                                  ),
+                          child: const Text('Register'),
                         ),
                         if (loading) ...[
                           const SizedBox(height: AppSpacing.s6),

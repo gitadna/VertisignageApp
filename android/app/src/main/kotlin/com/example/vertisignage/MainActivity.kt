@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.AudioManager
 import android.os.Build
 import android.os.PowerManager
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -28,9 +29,48 @@ class MainActivity : FlutterActivity() {
                         setVolumePercent(percent)
                         result.success(null)
                     }
+                    "setMuted" -> {
+                        val muted = call.argument<Boolean>("muted") ?: false
+                        setMuted(muted)
+                        result.success(null)
+                    }
+                    "setBrightness" -> {
+                        val percent = call.argument<Int>("percent") ?: 100
+                        setBrightnessPercent(percent)
+                        result.success(null)
+                    }
+                    "wakeApp" -> {
+                        wakeApp()
+                        result.success(null)
+                    }
                     "restartApp" -> {
                         restartApp()
                         result.success(null)
+                    }
+                    "showOverlay" -> {
+                        val text = call.argument<String>("text") ?: "VertiSignage"
+                        val mediaUrl = call.argument<String>("mediaUrl")
+                        val mediaKind = call.argument<String>("mediaKind")
+                        val untilDismissed = call.argument<Boolean>("untilDismissed") ?: true
+                        val durationSec = call.argument<Int>("durationSec") ?: 10
+                        val opacity = call.argument<Double>("opacity") ?: 0.9
+                        result.success(
+                            showOverlay(
+                                text = text,
+                                mediaUrl = mediaUrl,
+                                mediaKind = mediaKind,
+                                untilDismissed = untilDismissed,
+                                durationSec = durationSec,
+                                opacity = opacity,
+                            ),
+                        )
+                    }
+                    "hideOverlay" -> {
+                        hideOverlay()
+                        result.success(true)
+                    }
+                    "canDrawOverlays" -> {
+                        result.success(canDrawOverlays())
                     }
                     "rebootDevice" -> {
                         result.success(tryReboot())
@@ -114,6 +154,25 @@ class MainActivity : FlutterActivity() {
         am.setStreamVolume(AudioManager.STREAM_MUSIC, idx, 0)
     }
 
+    private fun setMuted(muted: Boolean) {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        am.adjustStreamVolume(
+            AudioManager.STREAM_MUSIC,
+            if (muted) AudioManager.ADJUST_MUTE else AudioManager.ADJUST_UNMUTE,
+            0,
+        )
+    }
+
+    private fun setBrightnessPercent(percent: Int) {
+        val lp = window.attributes
+        lp.screenBrightness = (percent.coerceIn(1, 100) / 100f)
+        window.attributes = lp
+    }
+
+    private fun wakeApp() {
+        CommandRelay.wakeApp(this, this)
+    }
+
     /**
      * Relaunch this app's launcher activity.
      *
@@ -161,5 +220,39 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val DEVICE_CHANNEL = "vertisignage/device"
         private const val KIOSK_CHANNEL = "vertisignage/kiosk"
+    }
+
+    private fun canDrawOverlays(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Settings.canDrawOverlays(this)
+        } else {
+            true
+        }
+    }
+
+    private fun showOverlay(
+        text: String,
+        mediaUrl: String?,
+        mediaKind: String?,
+        untilDismissed: Boolean,
+        durationSec: Int,
+        opacity: Double,
+    ): Boolean {
+        if (!canDrawOverlays()) return false
+        CommandRelay.showOverlay(
+            context = this,
+            text = text,
+            mediaUrl = mediaUrl,
+            mediaKind = mediaKind,
+            untilDismissed = untilDismissed,
+            durationSec = durationSec,
+            opacity = opacity,
+        )
+        wakeApp()
+        return true
+    }
+
+    private fun hideOverlay() {
+        CommandRelay.hideOverlay(this)
     }
 }

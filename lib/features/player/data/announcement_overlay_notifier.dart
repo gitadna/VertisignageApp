@@ -9,6 +9,8 @@ enum AnnouncementMediaKind {
   video,
 }
 
+enum AnnouncementRenderMode { overlay, ticker }
+
 /// Full-screen announcement from realtime `ANNOUNCEMENT`; auto-dismiss calls [onDismiss].
 ///
 /// If a new announcement replaces an active one, the timer resets without invoking the prior
@@ -20,16 +22,28 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
   String? _id;
   AnnouncementMediaKind _mediaKind = AnnouncementMediaKind.none;
   String? _mediaUrl;
+  AnnouncementRenderMode _mode = AnnouncementRenderMode.overlay;
+  String _title = 'Announcement';
+  String? _body;
+  bool _untilDismissed = false;
 
   String? get announcementId => _id;
   AnnouncementMediaKind get mediaKind => _mediaKind;
   String? get mediaUrl => _mediaUrl;
+  AnnouncementRenderMode get mode => _mode;
+  String get title => _title;
+  String? get body => _body;
+  bool get untilDismissed => _untilDismissed;
 
   bool get isActive => _id != null;
 
   void show({
     required String announcementId,
     required int durationSec,
+    required AnnouncementRenderMode mode,
+    required String title,
+    String? body,
+    required bool untilDismissed,
     AnnouncementMediaKind mediaKind = AnnouncementMediaKind.none,
     String? mediaUrl,
     required VoidCallback onDismiss,
@@ -46,13 +60,19 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
             : mediaKind == AnnouncementMediaKind.video
             ? AnnouncementMediaKind.video
             : AnnouncementMediaKind.image;
+    _mode = mode;
+    _title = title;
+    _body = body;
+    _untilDismissed = untilDismissed;
 
     _onDismiss = onDismiss;
 
     notifyListeners();
 
-    final ms = (durationSec.clamp(3, 600) * 1000).toInt();
-    _timer = Timer(Duration(milliseconds: ms), _finishFromTimer);
+    if (!untilDismissed) {
+      final ms = (durationSec.clamp(3, 600) * 1000).toInt();
+      _timer = Timer(Duration(milliseconds: ms), _finishFromTimer);
+    }
   }
 
   void dismissManual() => _finishFromTimer();
@@ -65,6 +85,10 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
     _id = null;
     _mediaUrl = null;
     _mediaKind = AnnouncementMediaKind.none;
+    _mode = AnnouncementRenderMode.overlay;
+    _title = 'Announcement';
+    _body = null;
+    _untilDismissed = false;
 
     final cb = _onDismiss;
     _onDismiss = null;

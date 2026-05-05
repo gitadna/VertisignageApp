@@ -56,6 +56,7 @@ class RealtimeDispatcher {
   final MediaCacheService _cache;
   final OtaUpdateService _ota;
   final PlayerTelemetry _telemetry;
+  Timer? _overlayAutoHideTimer;
 
   final LinkedHashSet<String> _recentMessageIds = LinkedHashSet<String>();
   final LinkedHashSet<String> _recentAnnouncementIds = LinkedHashSet<String>();
@@ -175,6 +176,59 @@ class RealtimeDispatcher {
       return;
     }
 
+    if (cmd is OverlayShowCommand) {
+      if (_dedupe(cmd.messageId)) return;
+      final ok = await _device.showOverlay(
+        text: cmd.text,
+        mediaUrl: cmd.mediaUrl,
+        mediaKind: cmd.mediaKind,
+        untilDismissed: cmd.untilDismissed,
+        durationSec: cmd.durationSec,
+        opacity: cmd.opacity,
+      );
+      if (!ok) {
+        // Fallback to in-app announcement overlay when native draw-over-apps is unavailable.
+        _player.beginAnnouncementHold();
+        _announcementOverlay.show(
+          announcementId: 'overlay-fallback-${cmd.messageId}',
+          durationSec: cmd.durationSec,
+          untilDismissed: false,
+          mode: AnnouncementRenderMode.overlay,
+          title: cmd.text,
+          body: null,
+          mediaKind: AnnouncementMediaKind.none,
+          mediaUrl: null,
+          onDismiss: _player.endAnnouncementHold,
+        );
+      }
+      await _fleetApi.postCommandAck(
+        messageId: cmd.messageId,
+        commandType: 'OVERLAY_SHOW',
+        ok: ok,
+        detail: <String, dynamic>{'overlayPermission': await _device.canDrawOverlays()},
+      );
+      if (ok && !cmd.untilDismissed) {
+        _overlayAutoHideTimer?.cancel();
+        _overlayAutoHideTimer = Timer(Duration(seconds: cmd.durationSec), () {
+          unawaited(_device.hideOverlay());
+        });
+      }
+      return;
+    }
+
+    if (cmd is OverlayHideCommand) {
+      if (_dedupe(cmd.messageId)) return;
+      _overlayAutoHideTimer?.cancel();
+      _overlayAutoHideTimer = null;
+      await _device.hideOverlay();
+      await _fleetApi.postCommandAck(
+        messageId: cmd.messageId,
+        commandType: 'OVERLAY_HIDE',
+        ok: true,
+      );
+      return;
+    }
+
     if (cmd is PlaylistUpdatedCommand || cmd is SyncRequestCommand) {
       await _playlistSync.sync();
       return;
@@ -193,10 +247,20 @@ class RealtimeDispatcher {
       _announcementOverlay.show(
         announcementId: cmd.announcementId,
         durationSec: cmd.durationSec,
+        untilDismissed: cmd.untilDismissed,
+        mode: cmd.mode == 'ticker'
+            ? AnnouncementRenderMode.ticker
+            : AnnouncementRenderMode.overlay,
+        title: cmd.title,
+        body: cmd.body,
         mediaKind: kind,
         mediaUrl: url,
         onDismiss: _player.endAnnouncementHold,
       );
+      return;
+    }
+    if (cmd is AnnouncementClearCommand) {
+      _announcementOverlay.dismissManual();
       return;
     }
 
@@ -214,6 +278,40 @@ class RealtimeDispatcher {
     }
     if (cmd is VolumeSetCommand) {
       await _device.setVolumePercent(cmd.volume);
+      return;
+    }
+    if (cmd is MuteSetCommand) {
+      await _device.setMuted(cmd.muted);
+      return;
+    }
+    if (cmd is BrightnessSetCommand) {
+      await _device.setBrightnessPercent(cmd.brightness);
+      return;
+    }
+    if (cmd is PlaybackPauseCommand) {
+      if (cmd.paused) {
+        _player.requestPause();
+      } else {
+        _player.requestResume();
+      }
+      return;
+    }
+    if (cmd is PlaybackSkipCommand) {
+      if (cmd.direction == 'previous') {
+        await _player.goToPrevious();
+      } else {
+        await _player.goToNext();
+      }
+      return;
+    }
+    if (cmd is WakeAppCommand) {
+      await _device.wakeAppToForeground();
+      await _fleetApi.postCommandAck(
+        messageId: cmd.messageId,
+        commandType: 'WAKE_APP',
+        ok: true,
+        detail: <String, dynamic>{'reason': cmd.reason ?? 'admin_wake'},
+      );
       return;
     }
     if (cmd is RestartAppCommand) {

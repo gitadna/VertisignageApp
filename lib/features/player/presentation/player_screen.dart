@@ -14,6 +14,7 @@ import '../../../models/playlist_item.dart';
 import '../data/media_cache_service.dart';
 import '../data/playlist_sync_service.dart';
 import 'announcement_overlay_layer.dart';
+import 'announcement_ticker_layer.dart';
 import 'emergency_overlay_layer.dart';
 import 'playback_layers.dart';
 import 'player_controller.dart';
@@ -299,6 +300,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
           ),
           const AnnouncementOverlayLayer(),
+          const AnnouncementTickerLayer(),
           const EmergencyOverlayLayer(),
         ],
       ),

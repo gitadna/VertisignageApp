@@ -4,23 +4,37 @@ import '../../../core/errors/app_exception.dart';
 import '../../../models/device_identity.dart';
 import 'pairing_result.dart';
 
-/// REST pairing against `POST /api/devices/pair`.
+/// REST pairing/register against kiosk bootstrap endpoints.
 class PairingApi {
   PairingApi(this._dio);
 
   final Dio _dio;
 
   /// Completes pairing on the server; persists [PairingCompleteResult.accessToken] via [TokenStore].
-  Future<PairingCompleteResult> pairDevice(String pairingCode) async {
-    final normalized = pairingCode.trim().toUpperCase();
+  Future<PairingCompleteResult> pairDevice({
+    required String licenseId,
+    required String deviceName,
+    String? fingerprint,
+  }) async {
+    final normalized = licenseId.trim().toUpperCase();
+    final normalizedName = deviceName.trim();
     if (normalized.isEmpty) {
-      throw const AppNetworkException('Pairing code is required');
+      throw const AppNetworkException('License ID is required');
+    }
+    if (normalizedName.isEmpty) {
+      throw const AppNetworkException('Device name is required');
     }
 
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/api/devices/pair',
-        data: <String, dynamic>{'pairingCode': normalized},
+        '/api/devices/register',
+        data: <String, dynamic>{
+          'licenseId': normalized,
+          'pairingCode': normalized,
+          'deviceName': normalizedName,
+          if (fingerprint != null && fingerprint.isNotEmpty)
+            'fingerprint': fingerprint,
+        },
       );
 
       final body = response.data;
@@ -64,6 +78,43 @@ class PairingApi {
       }
       final mapped = _mapDioException(e);
       throw mapped;
+    }
+  }
+
+  Future<PairingCompleteResult> recoverDevice({
+    required String deviceName,
+    required String fingerprint,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/devices/register',
+        data: <String, dynamic>{
+          'deviceName': deviceName.trim(),
+          'fingerprint': fingerprint,
+        },
+      );
+      final body = response.data;
+      if (body == null) {
+        throw const AppParseException('Empty response');
+      }
+      if (body['success'] != true) {
+        final msg = _messageFromBody(body) ?? 'Recovery failed';
+        throw AppNetworkException(msg, statusCode: response.statusCode);
+      }
+      final raw = body['data'];
+      if (raw is! Map<String, dynamic>) {
+        throw const AppParseException('Invalid device payload');
+      }
+      final token = raw['accessToken'] as String?;
+      if (token == null || token.isEmpty) {
+        throw const AppParseException('Recovery response missing access token');
+      }
+      return PairingCompleteResult(
+        identity: DeviceIdentity.fromApi(raw),
+        accessToken: token,
+      );
+    } on DioException catch (e) {
+      throw _mapDioException(e);
     }
   }
 

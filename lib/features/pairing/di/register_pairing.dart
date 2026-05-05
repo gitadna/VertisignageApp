@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:get_it/get_it.dart';
 
+import '../../../services/device_fingerprint_service.dart';
 import '../../../services/token_store.dart';
 import '../data/pairing_api.dart';
 import '../presentation/pairing_controller.dart';
@@ -13,6 +14,7 @@ void registerPairingModule(GetIt getIt) {
     () => PairingController(
       pairingApi: getIt<PairingApi>(),
       tokenStore: getIt<TokenStore>(),
+      fingerprintService: getIt<DeviceFingerprintService>(),
     ),
   );
 }

@@ -15,6 +15,7 @@ import '../../features/player/data/ota_update_service.dart';
 import '../../features/player/data/player_telemetry.dart';
 import '../../features/player/data/remote_log_uploader.dart';
 import '../../services/device_service.dart';
+import '../../services/device_fingerprint_service.dart';
 import '../../services/token_reader.dart';
 import '../../services/token_store.dart';
 import '../network/dio_provider.dart';
@@ -66,6 +67,9 @@ Future<void> configureDependencies() async {
   );
 
   sl.registerLazySingleton<DeviceService>(DeviceService.new);
+  sl.registerLazySingleton<DeviceFingerprintService>(
+    DeviceFingerprintService.new,
+  );
 
   sl.registerLazySingleton<OtaUpdateService>(
     () => OtaUpdateService(

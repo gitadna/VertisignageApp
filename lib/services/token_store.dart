@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../core/constants/storage_keys.dart';
 import '../core/storage/local_storage.dart';
@@ -13,6 +14,19 @@ class TokenStore extends ChangeNotifier implements TokenReader {
   TokenStore(this._storage);
 
   final LocalStorage _storage;
+  static const FlutterSecureStorage _secure = FlutterSecureStorage(
+    aOptions: AndroidOptions(),
+  );
+
+  Future<void> _writeSecure(String key, String? value) async {
+    try {
+      if (value == null) {
+        await _secure.delete(key: key);
+      } else {
+        await _secure.write(key: key, value: value);
+      }
+    } catch (_) {}
+  }
 
   @override
   String? get accessToken {
@@ -30,8 +44,10 @@ class TokenStore extends ChangeNotifier implements TokenReader {
         StorageKeys.accessToken,
         session.accessToken!,
       );
+      await _writeSecure(StorageKeys.accessToken, session.accessToken);
     } else {
       await _storage.remove(StorageKeys.authBox, StorageKeys.accessToken);
+      await _writeSecure(StorageKeys.accessToken, null);
     }
     if (session.refreshToken != null) {
       await _storage.setString(
@@ -39,12 +55,18 @@ class TokenStore extends ChangeNotifier implements TokenReader {
         StorageKeys.refreshToken,
         session.refreshToken!,
       );
+      await _writeSecure(StorageKeys.refreshToken, session.refreshToken);
     } else {
       await _storage.remove(StorageKeys.authBox, StorageKeys.refreshToken);
+      await _writeSecure(StorageKeys.refreshToken, null);
     }
     if (session.accessTokenExpiresAt != null) {
       await _storage.setString(
         StorageKeys.authBox,
+        StorageKeys.accessTokenExpiresAt,
+        session.accessTokenExpiresAt!.toIso8601String(),
+      );
+      await _writeSecure(
         StorageKeys.accessTokenExpiresAt,
         session.accessTokenExpiresAt!.toIso8601String(),
       );
@@ -53,6 +75,7 @@ class TokenStore extends ChangeNotifier implements TokenReader {
         StorageKeys.authBox,
         StorageKeys.accessTokenExpiresAt,
       );
+      await _writeSecure(StorageKeys.accessTokenExpiresAt, null);
     }
     notifyListeners();
   }
@@ -85,6 +108,9 @@ class TokenStore extends ChangeNotifier implements TokenReader {
 
   Future<void> clearAuth() async {
     await _storage.clearBox(StorageKeys.authBox);
+    await _writeSecure(StorageKeys.accessToken, null);
+    await _writeSecure(StorageKeys.refreshToken, null);
+    await _writeSecure(StorageKeys.accessTokenExpiresAt, null);
     notifyListeners();
   }
 
@@ -103,7 +129,38 @@ class TokenStore extends ChangeNotifier implements TokenReader {
       StorageKeys.pairedDeviceJson,
       jsonEncode(identity.toJson()),
     );
+    await _writeSecure(StorageKeys.pairedDeviceJson, jsonEncode(identity.toJson()));
     notifyListeners();
+  }
+
+  Future<void> saveLicenseContext({
+    required String licenseId,
+    required String deviceName,
+  }) async {
+    await _storage.setString(
+      StorageKeys.deviceBox,
+      StorageKeys.licenseId,
+      licenseId.trim().toUpperCase(),
+    );
+    await _writeSecure(StorageKeys.licenseId, licenseId.trim().toUpperCase());
+    await _storage.setString(
+      StorageKeys.deviceBox,
+      StorageKeys.deviceName,
+      deviceName.trim(),
+    );
+    await _writeSecure(StorageKeys.deviceName, deviceName.trim());
+  }
+
+  String? get savedLicenseId {
+    final raw = _storage.getString(StorageKeys.deviceBox, StorageKeys.licenseId);
+    if (raw == null || raw.trim().isEmpty) return null;
+    return raw.trim().toUpperCase();
+  }
+
+  String? get savedDeviceName {
+    final raw = _storage.getString(StorageKeys.deviceBox, StorageKeys.deviceName);
+    if (raw == null || raw.trim().isEmpty) return null;
+    return raw.trim();
   }
 
   /// Sync read for startup gating and [hasPairedDevice].
@@ -132,6 +189,10 @@ class TokenStore extends ChangeNotifier implements TokenReader {
     await _storage.clearBox(StorageKeys.authBox);
     await _storage.remove(StorageKeys.deviceBox, StorageKeys.pairedDeviceJson);
     await _storage.remove(StorageKeys.deviceBox, StorageKeys.playlistBundleJson);
+    await _writeSecure(StorageKeys.accessToken, null);
+    await _writeSecure(StorageKeys.refreshToken, null);
+    await _writeSecure(StorageKeys.accessTokenExpiresAt, null);
+    await _writeSecure(StorageKeys.pairedDeviceJson, null);
     notifyListeners();
   }
 }

@@ -38,6 +38,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
             </intent-filter>
         </receiver>
 
@@ -45,6 +46,21 @@
             android:name=".KioskForegroundService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback"/>
+        <service
+            android:name=".CommandRelayService"
+            android:exported="false"/>
+        <service
+            android:name=".OverlayWindowService"
+            android:exported="false"/>
+        <receiver
+            android:name=".CommandRelayReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.vertisignage.ACTION_WAKE"/>
+                <action android:name="com.example.vertisignage.ACTION_OVERLAY_SHOW"/>
+                <action android:name="com.example.vertisignage.ACTION_OVERLAY_HIDE"/>
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

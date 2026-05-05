@@ -42,6 +42,7 @@ void registerPlayerModule(GetIt getIt) {
       tokenStore: getIt<TokenStore>(),
       telemetry: getIt<PlayerTelemetry>(),
       cache: getIt<MediaCacheService>(),
+      device: getIt<DeviceService>(),
       storage: getIt<LocalStorage>(),
     ),
   );

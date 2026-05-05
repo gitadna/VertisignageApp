@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../../../core/errors/app_exception.dart';
 import '../../../models/auth_session.dart';
 import '../../../models/device_identity.dart';
+import '../../../services/device_fingerprint_service.dart';
 import '../../../services/token_store.dart';
 import '../data/pairing_api.dart';
 
@@ -13,25 +14,40 @@ class PairingController extends ChangeNotifier {
   PairingController({
     required PairingApi pairingApi,
     required TokenStore tokenStore,
+    required DeviceFingerprintService fingerprintService,
   })  : _pairingApi = pairingApi,
-        _tokenStore = tokenStore;
+        _tokenStore = tokenStore,
+        _fingerprintService = fingerprintService;
 
   final PairingApi _pairingApi;
   final TokenStore _tokenStore;
+  final DeviceFingerprintService _fingerprintService;
 
   PairingPhase phase = PairingPhase.idle;
   String? errorMessage;
   DeviceIdentity? lastPaired;
 
-  Future<void> submit(String rawCode) async {
+  Future<void> submit({
+    required String rawLicenseId,
+    required String rawDeviceName,
+  }) async {
     phase = PairingPhase.loading;
     errorMessage = null;
     notifyListeners();
 
     try {
-      final result = await _pairingApi.pairDevice(rawCode);
+      final fingerprint = await _fingerprintService.getFingerprint();
+      final result = await _pairingApi.pairDevice(
+        licenseId: rawLicenseId,
+        deviceName: rawDeviceName,
+        fingerprint: fingerprint,
+      );
       await _tokenStore.saveSession(
         AuthSession(accessToken: result.accessToken),
+      );
+      await _tokenStore.saveLicenseContext(
+        licenseId: rawLicenseId,
+        deviceName: rawDeviceName,
       );
       await _tokenStore.savePairedDevice(result.identity);
       lastPaired = result.identity;
@@ -47,6 +63,48 @@ class PairingController extends ChangeNotifier {
       }
       phase = PairingPhase.error;
       errorMessage = 'Something went wrong';
+      notifyListeners();
+    }
+  }
+
+  Future<void> recoverFromSavedLicense() async {
+    final licenseId = _tokenStore.savedLicenseId;
+    final deviceName = _tokenStore.savedDeviceName;
+    if (licenseId == null || deviceName == null) return;
+    if (phase == PairingPhase.loading) return;
+    await submit(rawLicenseId: licenseId, rawDeviceName: deviceName);
+  }
+
+  Future<void> recoverFromFingerprint() async {
+    if (phase == PairingPhase.loading) return;
+    phase = PairingPhase.loading;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final fingerprint = await _fingerprintService.getFingerprint();
+      final defaultName = _tokenStore.savedDeviceName ?? 'Android Screen';
+      final result = await _pairingApi.recoverDevice(
+        deviceName: defaultName,
+        fingerprint: fingerprint,
+      );
+      await _tokenStore.saveSession(AuthSession(accessToken: result.accessToken));
+      await _tokenStore.savePairedDevice(result.identity);
+      final savedLicense = result.identity.licenseId;
+      if (savedLicense != null && savedLicense.isNotEmpty) {
+        await _tokenStore.saveLicenseContext(
+          licenseId: savedLicense,
+          deviceName: defaultName,
+        );
+      }
+      lastPaired = result.identity;
+      phase = PairingPhase.success;
+      notifyListeners();
+    } on AppException catch (e) {
+      phase = PairingPhase.idle;
+      errorMessage = e.message;
+      notifyListeners();
+    } catch (_) {
+      phase = PairingPhase.idle;
       notifyListeners();
     }
   }

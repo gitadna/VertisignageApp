@@ -12,6 +12,8 @@ abstract final class StorageKeys {
 
   /// Full paired device record as JSON (see [DeviceIdentity]).
   static const String pairedDeviceJson = 'paired_device_json';
+  static const String licenseId = 'license_id';
+  static const String deviceName = 'device_name';
 
   /// Cached playlist snapshot `{ version, items }` from sync.
   static const String playlistBundleJson = 'playlist_bundle_json';

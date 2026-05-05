@@ -41,6 +41,37 @@ class VolumeSetCommand extends RealtimeCommand {
   final int volume;
 }
 
+class MuteSetCommand extends RealtimeCommand {
+  const MuteSetCommand({required this.muted});
+
+  final bool muted;
+}
+
+class BrightnessSetCommand extends RealtimeCommand {
+  const BrightnessSetCommand({required this.brightness});
+
+  final int brightness;
+}
+
+class PlaybackPauseCommand extends RealtimeCommand {
+  const PlaybackPauseCommand({required this.paused});
+
+  final bool paused;
+}
+
+class PlaybackSkipCommand extends RealtimeCommand {
+  const PlaybackSkipCommand({required this.direction});
+
+  final String direction;
+}
+
+class WakeAppCommand extends RealtimeCommand {
+  const WakeAppCommand({required this.messageId, this.reason});
+
+  final String messageId;
+  final String? reason;
+}
+
 class RestartAppCommand extends RealtimeCommand {
   const RestartAppCommand({this.reason});
 
@@ -79,6 +110,32 @@ class ClearCacheCommand extends RealtimeCommand {
   final String messageId;
 }
 
+class OverlayShowCommand extends RealtimeCommand {
+  const OverlayShowCommand({
+    required this.messageId,
+    required this.text,
+    this.mediaUrl,
+    this.mediaKind,
+    this.untilDismissed = true,
+    this.durationSec = 10,
+    this.opacity = 0.9,
+  });
+
+  final String messageId;
+  final String text;
+  final String? mediaUrl;
+  final String? mediaKind;
+  final bool untilDismissed;
+  final int durationSec;
+  final double opacity;
+}
+
+class OverlayHideCommand extends RealtimeCommand {
+  const OverlayHideCommand({required this.messageId});
+
+  final String messageId;
+}
+
 class AnnouncementCommand extends RealtimeCommand {
   const AnnouncementCommand({
     required this.announcementId,
@@ -88,6 +145,8 @@ class AnnouncementCommand extends RealtimeCommand {
     required this.durationSec,
     this.mediaUrl,
     this.mediaKind,
+    this.mode,
+    this.untilDismissed = false,
   });
 
   final String announcementId;
@@ -98,6 +157,13 @@ class AnnouncementCommand extends RealtimeCommand {
   final String? mediaUrl;
   /// Server hint: `image` or `video`.
   final String? mediaKind;
+  final String? mode;
+  final bool untilDismissed;
+}
+
+class AnnouncementClearCommand extends RealtimeCommand {
+  const AnnouncementClearCommand({this.announcementId});
+  final String? announcementId;
 }
 
 /// JSON → typed command; unknown types return null (ignored).
@@ -144,6 +210,34 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final v = payload['volume'];
         if (v is! num) return null;
         return VolumeSetCommand(volume: v.round().clamp(0, 100));
+      case 'MUTE_SET':
+        if (payload is! Map<String, dynamic>) return null;
+        final muted = payload['muted'];
+        if (muted is! bool) return null;
+        return MuteSetCommand(muted: muted);
+      case 'BRIGHTNESS_SET':
+        if (payload is! Map<String, dynamic>) return null;
+        final b = payload['brightness'];
+        if (b is! num) return null;
+        return BrightnessSetCommand(brightness: b.round().clamp(1, 100));
+      case 'PLAYBACK_PAUSE':
+        if (payload is! Map<String, dynamic>) return null;
+        final paused = payload['paused'];
+        if (paused is! bool) return null;
+        return PlaybackPauseCommand(paused: paused);
+      case 'PLAYBACK_SKIP':
+        if (payload is! Map<String, dynamic>) return null;
+        final direction = payload['direction'] as String?;
+        if (direction == null) return null;
+        return PlaybackSkipCommand(direction: direction);
+      case 'WAKE_APP':
+        if (payload is! Map<String, dynamic>) return null;
+        final mid = payload['messageId'] as String?;
+        if (mid == null) return null;
+        return WakeAppCommand(
+          messageId: mid,
+          reason: payload['reason'] as String?,
+        );
       case 'RESTART_APP':
         String? reason;
         if (payload is Map<String, dynamic>) {
@@ -180,6 +274,34 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final mid = payload['messageId'] as String?;
         if (mid == null) return null;
         return ClearCacheCommand(messageId: mid);
+      case 'OVERLAY_SHOW':
+        if (payload is! Map<String, dynamic>) return null;
+        final mid = payload['messageId'] as String?;
+        final text = payload['text'] as String?;
+        if (mid == null || text == null || text.trim().isEmpty) return null;
+        final mediaUrl = payload['mediaUrl'] as String?;
+        final mediaKind = payload['mediaKind'] as String?;
+        final untilDismissed = payload['untilDismissed'] == null
+            ? true
+            : payload['untilDismissed'] == true;
+        final durationRaw = payload['durationSec'];
+        final durationSec = durationRaw is num ? durationRaw.round() : 10;
+        final opacityRaw = payload['opacity'];
+        final opacity = opacityRaw is num ? opacityRaw.toDouble() : 0.9;
+        return OverlayShowCommand(
+          messageId: mid,
+          text: text.trim(),
+          mediaUrl: mediaUrl,
+          mediaKind: mediaKind,
+          untilDismissed: untilDismissed,
+          durationSec: durationSec.clamp(3, 1200),
+          opacity: opacity.clamp(0.5, 1).toDouble(),
+        );
+      case 'OVERLAY_HIDE':
+        if (payload is! Map<String, dynamic>) return null;
+        final mid = payload['messageId'] as String?;
+        if (mid == null) return null;
+        return OverlayHideCommand(messageId: mid);
       case 'ANNOUNCEMENT':
         if (payload is! Map<String, dynamic>) return null;
         final aid = payload['announcementId'] as String?;
@@ -193,6 +315,8 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
             ? rawMedia.trim()
             : null;
         final mediaKind = payload['mediaKind'] as String?;
+        final mode = payload['mode'] as String?;
+        final untilDismissed = payload['untilDismissed'] == true;
         return AnnouncementCommand(
           announcementId: aid,
           title: (title == null || title.isEmpty) ? 'Announcement' : title,
@@ -200,6 +324,13 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
           durationSec: durationSec,
           mediaUrl: mediaUrl,
           mediaKind: mediaKind,
+          mode: mode,
+          untilDismissed: untilDismissed,
+        );
+      case 'ANNOUNCEMENT_CLEAR':
+        if (payload is! Map<String, dynamic>) return const AnnouncementClearCommand();
+        return AnnouncementClearCommand(
+          announcementId: payload['announcementId'] as String?,
         );
       default:
         return null;
