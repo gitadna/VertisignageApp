@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../core/di/injection.dart';
 import '../data/announcement_overlay_notifier.dart';
@@ -35,8 +36,6 @@ class AnnouncementOverlayLayer extends StatelessWidget {
                   ),
                   kind: n.mediaKind,
                   url: n.mediaUrl,
-                  title: n.title,
-                  body: n.body,
                 ),
               );
             },
@@ -52,14 +51,10 @@ class _AnnouncementMediaFill extends StatefulWidget {
     super.key,
     required this.kind,
     required this.url,
-    required this.title,
-    required this.body,
   });
 
   final AnnouncementMediaKind kind;
   final String? url;
-  final String title;
-  final String? body;
 
   @override
   State<_AnnouncementMediaFill> createState() => _AnnouncementMediaFillState();
@@ -67,8 +62,9 @@ class _AnnouncementMediaFill extends StatefulWidget {
 
 class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
   VideoPlayerController? _video;
+  WebViewController? _web;
   bool _videoFailed = false;
-  int _retryTick = 0;
+  bool _webFailed = false;
 
   @override
   void initState() {
@@ -77,6 +73,11 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         widget.url != null &&
         widget.url!.isNotEmpty) {
       unawaited(_initVideo());
+    }
+    if (widget.kind == AnnouncementMediaKind.url &&
+        widget.url != null &&
+        widget.url!.isNotEmpty) {
+      _initWeb();
     }
   }
 
@@ -116,6 +117,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     final sourceChanged = oldWidget.url != widget.url || oldWidget.kind != widget.kind;
     if (!sourceChanged) return;
     _videoFailed = false;
+    _webFailed = false;
     final c = _video;
     if (c != null) {
       c.removeListener(_onVideoTick);
@@ -127,33 +129,48 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         widget.url!.isNotEmpty) {
       unawaited(_initVideo());
     }
+    if (widget.kind == AnnouncementMediaKind.url &&
+        widget.url != null &&
+        widget.url!.isNotEmpty) {
+      _initWeb();
+    }
+  }
+
+  void _initWeb() {
+    final raw = widget.url;
+    if (raw == null || raw.isEmpty) {
+      _web = null;
+      _webFailed = true;
+      if (mounted) setState(() {});
+      return;
+    }
+    final uri = Uri.tryParse(_effectiveUrl(raw));
+    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
+      _web = null;
+      _webFailed = true;
+      if (mounted) setState(() {});
+      return;
+    }
+    final controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF000000))
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onWebResourceError: (_) {
+            if (!mounted) return;
+            setState(() => _webFailed = true);
+          },
+        ),
+      );
+    _web = controller;
+    unawaited(controller.loadRequest(uri));
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   String _effectiveUrl(String url) {
-    if (_retryTick == 0) return url;
-    final uri = Uri.tryParse(url);
-    if (uri == null) return url;
-    final qp = Map<String, String>.from(uri.queryParameters);
-    qp['_retry'] = _retryTick.toString();
-    return uri.replace(queryParameters: qp).toString();
-  }
-
-  void _retryMedia() {
-    setState(() {
-      _retryTick++;
-      _videoFailed = false;
-    });
-    if (widget.kind == AnnouncementMediaKind.video &&
-        widget.url != null &&
-        widget.url!.isNotEmpty) {
-      final c = _video;
-      if (c != null) {
-        c.removeListener(_onVideoTick);
-        unawaited(c.dispose());
-        _video = null;
-      }
-      unawaited(_initVideo());
-    }
+    return url;
   }
 
   void _onVideoTick() {
@@ -190,11 +207,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         final w = sz.width;
         final h = sz.height;
         if (w <= 0 || h <= 0) {
-          return const _AnnouncementStateCard(
-            icon: Icons.broken_image_outlined,
-            title: 'Media unavailable',
-            message: 'Video metadata is invalid or empty.',
-          );
+          return const ColoredBox(color: Colors.black);
         }
         return ColoredBox(
           color: Colors.black,
@@ -227,12 +240,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         url != null &&
         url.isNotEmpty &&
         _videoFailed) {
-      return _AnnouncementStateCard(
-        icon: Icons.error_outline,
-        title: 'Could not play video',
-        message: url,
-        onRetry: _retryMedia,
-      );
+      return const ColoredBox(color: Colors.black);
     }
 
     if (widget.kind == AnnouncementMediaKind.image &&
@@ -246,12 +254,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
             effectiveUrl,
             fit: BoxFit.cover,
             alignment: Alignment.center,
-            errorBuilder: (_, _, _) => _AnnouncementStateCard(
-              icon: Icons.broken_image_outlined,
-              title: 'Could not load image',
-              message: url,
-              onRetry: _retryMedia,
-            ),
+            errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black),
             loadingBuilder: (ctx, child, progress) {
               if (progress == null) return child;
               return Center(
@@ -265,139 +268,20 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
       );
     }
 
-    return _AnnouncementTextFill(title: widget.title, body: widget.body);
-  }
-}
+    if (widget.kind == AnnouncementMediaKind.url &&
+        url != null &&
+        url.isNotEmpty &&
+        !_webFailed) {
+      final c = _web;
+      if (c == null) {
+        return const ColoredBox(color: Colors.black);
+      }
+      return ColoredBox(
+        color: Colors.black,
+        child: WebViewWidget(controller: c),
+      );
+    }
 
-class _AnnouncementTextFill extends StatelessWidget {
-  const _AnnouncementTextFill({required this.title, this.body});
-
-  final String title;
-  final String? body;
-
-  @override
-  Widget build(BuildContext context) {
-    final effectiveTitle = title.trim().isEmpty ? 'Announcement' : title.trim();
-    final effectiveBody = body?.trim();
-    return ColoredBox(
-      color: Colors.black,
-      child: SizedBox.expand(
-        child: Padding(
-          padding: EdgeInsets.zero,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(
-                  effectiveTitle,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 42,
-                    fontWeight: FontWeight.w700,
-                    height: 1.2,
-                  ),
-                ),
-              ),
-              if (effectiveBody != null && effectiveBody.isNotEmpty) ...[
-                const SizedBox(height: 18),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text(
-                    effectiveBody,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 24,
-                      fontWeight: FontWeight.w500,
-                      height: 1.3,
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _AnnouncementStateCard extends StatelessWidget {
-  const _AnnouncementStateCard({
-    required this.icon,
-    required this.title,
-    required this.message,
-    this.onRetry,
-  });
-
-  final IconData icon;
-  final String title;
-  final String message;
-  final VoidCallback? onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return ColoredBox(
-      color: Colors.black,
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 820),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white24),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
-                child: Row(
-                  children: [
-                    Icon(icon, color: Colors.white70, size: 32),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            message,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
-                            ),
-                          ),
-                          if (onRetry != null) ...[
-                            const SizedBox(height: 12),
-                            FilledButton.icon(
-                              onPressed: onRetry,
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('Retry'),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+    return const ColoredBox(color: Colors.black);
   }
 }

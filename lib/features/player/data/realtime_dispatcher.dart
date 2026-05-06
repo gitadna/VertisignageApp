@@ -151,6 +151,7 @@ class RealtimeDispatcher {
     final kind = mediaKindHint?.trim().toLowerCase();
     if (kind == 'video') return AnnouncementMediaKind.video;
     if (kind == 'image') return AnnouncementMediaKind.image;
+    if (kind == 'url') return AnnouncementMediaKind.url;
 
     final contentType = contentTypeHint?.trim().toLowerCase();
     if (contentType != null && contentType.startsWith('video/')) {
@@ -313,6 +314,7 @@ class RealtimeDispatcher {
         final nativeMediaKind = switch (kind) {
           AnnouncementMediaKind.video => 'video',
           AnnouncementMediaKind.image => 'image',
+          AnnouncementMediaKind.url => 'url',
           AnnouncementMediaKind.none => null,
         };
         await _device.showOverlay(

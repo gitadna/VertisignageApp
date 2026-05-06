@@ -196,11 +196,15 @@ class PlaylistSyncService extends ChangeNotifier {
 
       if (remote.items.isEmpty) {
         _serverPlaylistEmpty = true;
-        final strictOutsideWindow = remote.schedule?.source == 'none';
+        final fallbackMode =
+            remote.organization?.playbackFallbackMode.toLowerCase() ?? 'none';
+        final strictOutsideWindow =
+            fallbackMode == 'none' || remote.schedule?.source == 'none';
         if (strictOutsideWindow) {
           _log(
             'remote reported zero items (schedule.strict/no fallback); clearing playback',
           );
+          await _cache.pruneToUrls(const <String>[]);
           await _storage.save(remote);
           _pendingPlayable = null;
           _active = [];
@@ -235,6 +239,7 @@ class PlaylistSyncService extends ChangeNotifier {
       }
 
       await _storage.save(remote);
+      await _pruneCacheForPlayable(playable);
 
       if (_active.isEmpty) {
         _pendingPlayable = null;
@@ -374,6 +379,16 @@ class PlaylistSyncService extends ChangeNotifier {
       }
     }
     return true;
+  }
+
+  Future<void> _pruneCacheForPlayable(List<PlaylistItem> playable) async {
+    final keepUrls = <String>{
+      for (final item in _active)
+        if (item.mediaKind != PlaylistMediaKind.url) item.url.trim(),
+      for (final item in playable)
+        if (item.mediaKind != PlaylistMediaKind.url) item.url.trim(),
+    };
+    await _cache.pruneToUrls(keepUrls);
   }
 
   void disposeTimer() {

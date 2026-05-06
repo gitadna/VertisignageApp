@@ -7,6 +7,7 @@ enum AnnouncementMediaKind {
   none,
   image,
   video,
+  url,
 }
 
 enum AnnouncementRenderMode { overlay, ticker }
@@ -67,6 +68,8 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
             ? AnnouncementMediaKind.none
             : mediaKind == AnnouncementMediaKind.video
             ? AnnouncementMediaKind.video
+            : mediaKind == AnnouncementMediaKind.url
+            ? AnnouncementMediaKind.url
             : AnnouncementMediaKind.image;
     _mode = mode;
     _title = title;

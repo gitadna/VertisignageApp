@@ -39,6 +39,12 @@ class PlaylistApi {
         schedule = PlaylistScheduleContext.fromJson(sch);
       }
 
+      PlaylistOrganizationContext? organization;
+      final org = data['organization'];
+      if (org is Map<String, dynamic>) {
+        organization = PlaylistOrganizationContext.fromJson(org);
+      }
+
       DateTime? parseIso(String key) {
         final s = data[key] as String?;
         if (s == null || s.isEmpty) return null;
@@ -49,6 +55,7 @@ class PlaylistApi {
         version: version,
         items: items,
         schedule: schedule,
+        organization: organization,
         serverTimeUtc: parseIso('serverTimeUtc'),
         nextBoundaryUtc: parseIso('nextBoundaryUtc'),
       );

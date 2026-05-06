@@ -19,6 +19,9 @@ import android.media.MediaPlayer
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.ImageView
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -33,6 +36,7 @@ class OverlayWindowService : Service() {
     private var overlayText: TextView? = null
     private var overlayImage: ImageView? = null
     private var overlayVideo: VideoView? = null
+    private var overlayWeb: WebView? = null
     private val ui = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private var autoHide: Runnable? = null
@@ -159,6 +163,26 @@ class OverlayWindowService : Service() {
             visibility = View.GONE
             setBackgroundColor(Color.TRANSPARENT)
         }
+        val web = WebView(this).apply {
+            visibility = View.GONE
+            setBackgroundColor(Color.BLACK)
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            webViewClient =
+                object : WebViewClient() {
+                    override fun onReceivedError(
+                        view: WebView?,
+                        errorCode: Int,
+                        description: String?,
+                        failingUrl: String?,
+                    ) {
+                        if (!failingUrl.isNullOrBlank()) {
+                            hideTextForMedia()
+                        }
+                    }
+                }
+            webChromeClient = WebChromeClient()
+        }
         val video = VideoView(this).apply {
             visibility = View.GONE
             setBackgroundColor(Color.TRANSPARENT)
@@ -171,6 +195,13 @@ class OverlayWindowService : Service() {
         }
         root.addView(
             image,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        root.addView(
+            web,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -211,6 +242,7 @@ class OverlayWindowService : Service() {
         overlayText = tv
         overlayImage = image
         overlayVideo = video
+        overlayWeb = web
         bindMedia(mediaUrl, mediaKind)
         scheduleAutoHide(untilDismissed, durationSec, scheduleEndEpochMs)
     }
@@ -219,6 +251,9 @@ class OverlayWindowService : Service() {
         autoHide?.let { ui.removeCallbacks(it) }
         autoHide = null
         overlayVideo?.stopPlayback()
+        overlayWeb?.stopLoading()
+        overlayWeb?.loadUrl("about:blank")
+        overlayWeb?.destroy()
         overlayRoot?.let { root ->
             wm?.removeView(root)
         }
@@ -226,16 +261,19 @@ class OverlayWindowService : Service() {
         overlayText = null
         overlayImage = null
         overlayVideo = null
+        overlayWeb = null
     }
 
     private fun bindMedia(mediaUrl: String?, mediaKind: String?) {
         val image = overlayImage ?: return
         val video = overlayVideo ?: return
+        val web = overlayWeb
         val text = overlayText
         val url = mediaUrl?.trim()
         if (url.isNullOrEmpty()) {
             image.visibility = View.GONE
             video.visibility = View.GONE
+            web?.visibility = View.GONE
             video.stopPlayback()
             text?.visibility = View.VISIBLE
             return
@@ -244,12 +282,14 @@ class OverlayWindowService : Service() {
         val normalizedKind = when (mediaKind?.trim()?.lowercase()) {
             "video" -> "video"
             "image" -> "image"
+            "url" -> "url"
             else -> inferMediaKindFromUrl(url)
         }
 
         if (normalizedKind == "video") {
             image.visibility = View.GONE
             video.visibility = View.VISIBLE
+            web?.visibility = View.GONE
             text?.visibility = View.GONE
             try {
                 video.setVideoPath(url)
@@ -262,18 +302,34 @@ class OverlayWindowService : Service() {
                 }
                 video.setOnErrorListener { _, _, _ ->
                     video.visibility = View.GONE
-                    text?.visibility = View.VISIBLE
+                    hideTextForMedia()
                     true
                 }
             } catch (_: Exception) {
                 video.visibility = View.GONE
-                text?.visibility = View.VISIBLE
+                hideTextForMedia()
+            }
+            return
+        }
+
+        if (normalizedKind == "url") {
+            image.visibility = View.GONE
+            video.visibility = View.GONE
+            video.stopPlayback()
+            web?.visibility = View.VISIBLE
+            text?.visibility = View.GONE
+            try {
+                web?.loadUrl(url)
+            } catch (_: Exception) {
+                web?.visibility = View.GONE
+                hideTextForMedia()
             }
             return
         }
 
         video.visibility = View.GONE
         video.stopPlayback()
+        web?.visibility = View.GONE
         image.visibility = View.VISIBLE
         text?.visibility = View.GONE
         io.execute {
@@ -285,16 +341,20 @@ class OverlayWindowService : Service() {
                         text?.visibility = View.GONE
                     } else {
                         overlayImage?.visibility = View.GONE
-                        text?.visibility = View.VISIBLE
+                        hideTextForMedia()
                     }
                 }
             } catch (_: Exception) {
                 ui.post {
                     overlayImage?.visibility = View.GONE
-                    text?.visibility = View.VISIBLE
+                    hideTextForMedia()
                 }
             }
         }
+    }
+
+    private fun hideTextForMedia() {
+        overlayText?.visibility = View.GONE
     }
 
     private fun inferMediaKindFromUrl(url: String): String {

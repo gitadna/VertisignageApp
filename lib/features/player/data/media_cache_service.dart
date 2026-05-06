@@ -307,6 +307,56 @@ class MediaCacheService {
     }
   }
 
+  /// Removes cached media not referenced by [keepUrls].
+  ///
+  /// URL slides are ignored by callers; this only applies to downloaded files.
+  Future<void> pruneToUrls(Iterable<String> keepUrls) async {
+    try {
+      final dir = await _directory();
+      if (!await dir.exists()) return;
+
+      final keepTrimmed = <String>{
+        for (final u in keepUrls)
+          if (u.trim().isNotEmpty) u.trim(),
+      };
+      final keepNames = <String>{
+        for (final u in keepTrimmed) _fileNameForUrl(u),
+      };
+      final keepPaths = <String>{};
+      for (final url in keepTrimmed) {
+        final path = _pathByUrl[url];
+        if (path != null) keepPaths.add(path);
+      }
+
+      final removedPaths = <String>{};
+      await for (final entity in dir.list()) {
+        if (entity is! File) continue;
+        final path = entity.path;
+        final name = p.basename(path);
+        final shouldKeep = keepPaths.contains(path) || keepNames.contains(name);
+        if (shouldKeep) continue;
+        try {
+          final len = await entity.length();
+          await entity.delete();
+          removedPaths.add(path);
+          _lastAccessEpochMs.remove(path);
+          if (_trackedTotalBytes != null) {
+            _trackedTotalBytes = (_trackedTotalBytes! - len).clamp(0, 1 << 62);
+          }
+        } catch (_) {}
+      }
+
+      if (removedPaths.isNotEmpty) {
+        _pathByUrl.removeWhere((_, path) => removedPaths.contains(path));
+        await _persistLruToDisk();
+      }
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('MediaCacheService.pruneToUrls: $e\n$st');
+      }
+    }
+  }
+
   /// Ensures each asset is cached where needed. URL slides pass http(s) validation only.
   Future<List<PlaylistItem>> prefetchAndFilter(List<PlaylistItem> items) async {
     final ready = <PlaylistItem>[];
