@@ -16,6 +16,83 @@ class DeviceService {
   final MethodChannel _kiosk;
   final MethodChannel _pushBridge;
 
+  /// Enables boot recovery only after first user launch.
+  Future<bool> setFirstLaunchCompleted({bool completed = true}) async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final ok = await _device.invokeMethod<bool>(
+        'setFirstLaunchCompleted',
+        <String, dynamic>{'completed': completed},
+      );
+      return ok ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.setFirstLaunchCompleted', e, st);
+      return false;
+    }
+  }
+
+  /// Diagnostic: boot recovery pending marker set by native boot path.
+  Future<Map<String, dynamic>> getPendingBootRecovery() async {
+    if (!Platform.isAndroid) {
+      return <String, dynamic>{
+        'pending': false,
+        'reason': null,
+        'firstLaunchCompleted': true,
+      };
+    }
+    try {
+      final m = await _device.invokeMethod<dynamic>('getPendingBootRecovery');
+      if (m is Map) {
+        return Map<String, dynamic>.from(m);
+      }
+      return <String, dynamic>{
+        'pending': false,
+        'reason': 'unexpected_response',
+        'firstLaunchCompleted': false,
+      };
+    } catch (e, st) {
+      KioskLog.e('DeviceService.getPendingBootRecovery', e, st);
+      return <String, dynamic>{
+        'pending': false,
+        'reason': 'error',
+        'firstLaunchCompleted': false,
+      };
+    }
+  }
+
+  Future<bool> clearPendingBootRecovery() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final ok = await _device.invokeMethod<bool>('clearPendingBootRecovery');
+      return ok ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.clearPendingBootRecovery', e, st);
+      return false;
+    }
+  }
+
+  /// Explicitly kick native recovery scheduling (safe to call on resume).
+  Future<void> recoveryEnqueueNow(String reason) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _device.invokeMethod<void>('recoveryEnqueueNow', <String, dynamic>{'reason': reason});
+    } catch (e, st) {
+      KioskLog.e('DeviceService.recoveryEnqueueNow', e, st);
+    }
+  }
+
+  Future<void> recoveryEnsurePeriodic(String reason) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _device.invokeMethod<void>(
+        'recoveryEnsurePeriodic',
+        <String, dynamic>{'reason': reason},
+      );
+    } catch (e, st) {
+      KioskLog.e('DeviceService.recoveryEnsurePeriodic', e, st);
+    }
+  }
+
   /// Music stream volume 0–100.
   Future<void> setVolumePercent(int percent) async {
     final p = percent.clamp(0, 100);
@@ -253,7 +330,7 @@ class DeviceService {
           'untilDismissed': untilDismissed,
           'durationSec': durationSec,
           'opacity': opacity,
-          'scheduleEndsAtEpochMs': ?scheduleEndsAtEpochMs,
+          'scheduleEndsAtEpochMs': scheduleEndsAtEpochMs,
         },
       );
       return ok ?? false;

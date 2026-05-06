@@ -24,6 +24,7 @@ class KioskPermissionsGate extends StatefulWidget {
 class _KioskPermissionsGateState extends State<KioskPermissionsGate>
     with WidgetsBindingObserver {
   late final LocalStorage _storage = sl<LocalStorage>();
+  late final DeviceService _device = sl<DeviceService>();
 
   bool _loading = true;
   bool _needsSetup = false;
@@ -34,6 +35,9 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   bool _overlayRequiredForContinue = true;
   int _androidSdk = 0;
   bool _deviceOwner = false;
+  bool _bootRecoveryPending = false;
+  String? _bootRecoveryReason;
+  bool _firstLaunchCompleted = true;
 
   bool get _notificationsApplicable =>
       Platform.isAndroid && _androidSdk >= 33;
@@ -60,6 +64,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_refreshPermissionState());
+      unawaited(_kickRecovery('gate_resumed'));
     }
   }
 
@@ -86,6 +91,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
             ) ==
             '1';
     if (done) {
+      unawaited(_kickRecovery('gate_done_shortcircuit'));
       setState(() {
         _loading = false;
         _needsSetup = false;
@@ -94,8 +100,10 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
     }
 
     await _loadAndroidSdk();
-    _deviceOwner = await sl<DeviceService>().isDeviceOwner();
+    _deviceOwner = await _device.isDeviceOwner();
     _overlayRequiredForContinue = !_deviceOwner;
+
+    await _kickRecovery('gate_bootstrap');
 
     await _refreshPermissionState(skipSetState: true);
     if (!mounted) return;
@@ -112,6 +120,38 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
     setState(() {
       _loading = false;
       _needsSetup = true;
+    });
+  }
+
+  Future<void> _kickRecovery(String reason) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _device.recoveryEnsurePeriodic(reason);
+      await _device.recoveryEnqueueNow(reason);
+
+      final pending = await _device.getPendingBootRecovery();
+      if (!mounted) return;
+      setState(() {
+        _bootRecoveryPending = (pending['pending'] == true);
+        _bootRecoveryReason = pending['reason'] as String?;
+        _firstLaunchCompleted = (pending['firstLaunchCompleted'] == true);
+      });
+    } catch (e) {
+      // Never block the gate on recovery diagnostics.
+      debugPrint('Recovery kick failed: $e');
+    }
+  }
+
+  Future<void> _clearBootPending() async {
+    try {
+      await _device.clearPendingBootRecovery();
+    } catch (_) {
+      /* ignore */
+    }
+    if (!mounted) return;
+    setState(() {
+      _bootRecoveryPending = false;
+      _bootRecoveryReason = null;
     });
   }
 
@@ -190,7 +230,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   }
 
   Future<void> _openAutoStartSettings() async {
-    await sl<DeviceService>().openAutoStartSettings();
+    await _device.openAutoStartSettings();
   }
 
   @override
@@ -225,6 +265,48 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                         'Permissions for playback & remote control',
                         style: theme.textTheme.headlineSmall,
                       ),
+                      if (_bootRecoveryPending) ...[
+                        const SizedBox(height: 12),
+                        Card(
+                          margin: EdgeInsets.zero,
+                          color: theme.colorScheme.surfaceContainerHighest
+                              .withValues(alpha: 0.35),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Text(
+                                  'Background recovery pending',
+                                  style: theme.textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  _firstLaunchCompleted
+                                      ? 'Android reported a reboot/update event; background recovery is attempting to restart the kiosk foreground service.'
+                                      : 'This device rebooted or updated before the first app launch. Android does not allow safe auto-start until you open the app once.',
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                                if (_bootRecoveryReason != null) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Reason: $_bootRecoveryReason',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 12),
+                                OutlinedButton(
+                                  onPressed: _clearBootPending,
+                                  child: const Text('Dismiss'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       Text(
                         'Grant these so realtime playlist updates work, admin Take over can bring VertiSignage to the foreground, and Show on screen behaves reliably.',
@@ -381,7 +463,7 @@ class _AutoStartTipCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Recommended — does not block Continue. On Xiaomi, Oppo, Vivo, and similar builds, admin Take over can fail if background activity or auto-start is restricted.',
+              'Recommended — does not block Continue. On Xiaomi, Oppo, Vivo, OnePlus, Samsung and similar builds, admin Take over can fail if background activity or auto-start is restricted. Note: if the user force-stops the app, Android will block auto-start until the app is opened manually.',
               style: theme.textTheme.bodyMedium,
             ),
             const SizedBox(height: 12),

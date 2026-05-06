@@ -60,4 +60,7 @@ dependencies {
     // Native Verti FCM service references FirebaseMessaging types + FlutterFire helpers.
     implementation(platform("com.google.firebase:firebase-bom:34.12.0"))
     implementation("com.google.firebase:firebase-messaging")
+
+    // Reliable deferred recovery scheduling for background execution.
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
 }

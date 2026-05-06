@@ -54,6 +54,10 @@ abstract final class KioskPostBootstrap {
     final tokenStore = sl<TokenStore>();
     final device = sl<DeviceService>();
 
+    // Enable boot recovery only after the first successful app launch.
+    await device.setFirstLaunchCompleted(completed: true);
+    await device.recoveryEnsurePeriodic('post_bootstrap');
+
     await device.startForegroundNotification();
     await _maybeLogNotificationDeniedOnce();
 

@@ -9,6 +9,7 @@ import android.os.PowerManager
 import android.net.Uri
 import android.provider.Settings
 import android.view.WindowManager
+import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -44,6 +45,26 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEVICE_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "setFirstLaunchCompleted" -> {
+                        val completed = call.argument<Boolean>("completed") ?: true
+                        result.success(setFirstLaunchCompleted(completed))
+                    }
+                    "getPendingBootRecovery" -> {
+                        result.success(getPendingBootRecovery())
+                    }
+                    "clearPendingBootRecovery" -> {
+                        result.success(clearPendingBootRecovery())
+                    }
+                    "recoveryEnqueueNow" -> {
+                        val reason = call.argument<String>("reason") ?: "flutter"
+                        RecoveryScheduler.enqueueNow(applicationContext, "flutter:$reason")
+                        result.success(true)
+                    }
+                    "recoveryEnsurePeriodic" -> {
+                        val reason = call.argument<String>("reason") ?: "flutter"
+                        RecoveryScheduler.ensurePeriodic(applicationContext, "flutter:$reason")
+                        result.success(true)
+                    }
                     "setVolume" -> {
                         val percent = call.argument<Int>("percent") ?: 50
                         setVolumePercent(percent)
@@ -285,6 +306,64 @@ class MainActivity : FlutterActivity() {
         private const val DEVICE_CHANNEL = "vertisignage/device"
         private const val KIOSK_CHANNEL = "vertisignage/kiosk"
         private const val PUSH_BRIDGE_CHANNEL = "vertisignage/push_bridge"
+        private const val TAG = "VertiSignageBG"
+    }
+
+    private fun bgPrefs(): android.content.SharedPreferences {
+        val storageContext =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N)
+                applicationContext.createDeviceProtectedStorageContext()
+            else applicationContext
+        return storageContext.getSharedPreferences("vertisignage_bg", Context.MODE_PRIVATE)
+    }
+
+    private fun setFirstLaunchCompleted(completed: Boolean): Boolean {
+        return try {
+            bgPrefs().edit()
+                .putBoolean(BootReceiver.KEY_FIRST_LAUNCH_COMPLETED, completed)
+                .apply()
+            if (completed) {
+                // If we had boot events before first launch, try to recover now.
+                val pending = bgPrefs().getBoolean(BootReceiver.KEY_PENDING_BOOT_RECOVERY, false)
+                if (pending) {
+                    RecoveryScheduler.enqueueNow(applicationContext, "first_launch_completed_pending_boot")
+                }
+                RecoveryScheduler.ensurePeriodic(applicationContext, "first_launch_completed")
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "event=set_first_launch_failed source=MainActivity msg=${t::class.java.simpleName}:${t.message}")
+            false
+        }
+    }
+
+    private fun getPendingBootRecovery(): HashMap<String, Any?> {
+        return try {
+            val prefs = bgPrefs()
+            hashMapOf(
+                "pending" to prefs.getBoolean(BootReceiver.KEY_PENDING_BOOT_RECOVERY, false),
+                "reason" to prefs.getString(BootReceiver.KEY_PENDING_BOOT_RECOVERY_REASON, null),
+                "firstLaunchCompleted" to prefs.getBoolean(BootReceiver.KEY_FIRST_LAUNCH_COMPLETED, false),
+            )
+        } catch (t: Throwable) {
+            hashMapOf(
+                "pending" to false,
+                "reason" to "error:${t::class.java.simpleName}",
+                "firstLaunchCompleted" to false,
+            )
+        }
+    }
+
+    private fun clearPendingBootRecovery(): Boolean {
+        return try {
+            bgPrefs().edit()
+                .remove(BootReceiver.KEY_PENDING_BOOT_RECOVERY)
+                .remove(BootReceiver.KEY_PENDING_BOOT_RECOVERY_REASON)
+                .apply()
+            true
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     private fun isIgnoringBatteryOptimizations(): Boolean {
@@ -310,10 +389,12 @@ class MainActivity : FlutterActivity() {
 
     private fun openAutoStartSettings(): Boolean {
         val candidates = listOf(
+            // Xiaomi (MIUI)
             Intent().setClassName(
                 "com.miui.securitycenter",
                 "com.miui.permcenter.autostart.AutoStartManagementActivity",
             ),
+            // Oppo (ColorOS)
             Intent().setClassName(
                 "com.coloros.safecenter",
                 "com.coloros.safecenter.permission.startup.StartupAppListActivity",
@@ -322,13 +403,32 @@ class MainActivity : FlutterActivity() {
                 "com.oppo.safe",
                 "com.oppo.safe.permission.startup.StartupAppListActivity",
             ),
+            // Vivo / iQOO
+            Intent().setClassName(
+                "com.vivo.permissionmanager",
+                "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+            ),
             Intent().setClassName(
                 "com.iqoo.secure",
                 "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity",
             ),
+            // OnePlus (varies by OxygenOS version; best-effort)
             Intent().setClassName(
-                "com.vivo.permissionmanager",
-                "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+                "com.oneplus.security",
+                "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity",
+            ),
+            Intent().setClassName(
+                "com.oneplus.security",
+                "com.oneplus.security.chainlaunch.view.ChainLaunchViewPagerActivity",
+            ),
+            // Samsung (Smart Manager / Device care variants)
+            Intent().setClassName(
+                "com.samsung.android.lool",
+                "com.samsung.android.sm.ui.battery.BatteryActivity",
+            ),
+            Intent().setClassName(
+                "com.samsung.android.sm_cn",
+                "com.samsung.android.sm.ui.battery.BatteryActivity",
             ),
         )
 
