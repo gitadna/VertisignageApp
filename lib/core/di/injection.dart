@@ -14,6 +14,7 @@ import '../../features/player/data/kiosk_fleet_api.dart';
 import '../../features/player/data/ota_update_service.dart';
 import '../../features/player/data/player_telemetry.dart';
 import '../../features/player/data/remote_log_uploader.dart';
+import '../../kiosk/push_registration_coordinator.dart';
 import '../../services/device_service.dart';
 import '../../services/device_fingerprint_service.dart';
 import '../../services/token_reader.dart';
@@ -69,6 +70,15 @@ Future<void> configureDependencies() async {
   sl.registerLazySingleton<DeviceService>(DeviceService.new);
   sl.registerLazySingleton<DeviceFingerprintService>(
     DeviceFingerprintService.new,
+  );
+
+  sl.registerLazySingleton<PushRegistrationCoordinator>(
+    () => PushRegistrationCoordinator(
+      tokenStore: sl<TokenStore>(),
+      fleetApi: sl<KioskFleetApi>(),
+      device: sl<DeviceService>(),
+      env: env,
+    ),
   );
 
   sl.registerLazySingleton<OtaUpdateService>(

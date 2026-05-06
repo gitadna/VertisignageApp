@@ -4,8 +4,11 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.os.Build
+import android.os.Bundle
 import android.os.PowerManager
+import android.net.Uri
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -18,9 +21,26 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private lateinit var policyManager: DeviceOwnerPolicyManager
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
+            )
+        }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        policyManager = DeviceOwnerPolicyManager(this)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEVICE_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -40,20 +60,20 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "wakeApp" -> {
-                        wakeApp()
-                        result.success(null)
+                        result.success(dispatchWakeAppViaForegroundService())
                     }
                     "restartApp" -> {
-                        restartApp()
-                        result.success(null)
+                        result.success(restartApp())
                     }
                     "showOverlay" -> {
                         val text = call.argument<String>("text") ?: "VertiSignage"
                         val mediaUrl = call.argument<String>("mediaUrl")
                         val mediaKind = call.argument<String>("mediaKind")
-                        val untilDismissed = call.argument<Boolean>("untilDismissed") ?: true
+                        val untilDismissed = call.argument<Boolean>("untilDismissed") ?: false
                         val durationSec = call.argument<Int>("durationSec") ?: 10
                         val opacity = call.argument<Double>("opacity") ?: 0.9
+                        val scheduleEndsAtEpochMs =
+                            call.argument<Number>("scheduleEndsAtEpochMs")?.toLong() ?: 0L
                         result.success(
                             showOverlay(
                                 text = text,
@@ -62,6 +82,7 @@ class MainActivity : FlutterActivity() {
                                 untilDismissed = untilDismissed,
                                 durationSec = durationSec,
                                 opacity = opacity,
+                                scheduleEndsAtEpochMs = scheduleEndsAtEpochMs,
                             ),
                         )
                     }
@@ -76,10 +97,31 @@ class MainActivity : FlutterActivity() {
                         result.success(tryReboot())
                     }
                     "startLockTask" -> {
-                        result.success(tryStartLockTask())
+                        result.success(policyManager.enterLockTask(this))
                     }
                     "stopLockTask" -> {
-                        result.success(tryStopLockTask())
+                        result.success(policyManager.exitLockTask(this))
+                    }
+                    "isDeviceOwner" -> {
+                        result.success(policyManager.isDeviceOwner())
+                    }
+                    "applyKioskPolicies" -> {
+                        result.success(policyManager.applyKioskPolicies())
+                    }
+                    "clearKioskPolicies" -> {
+                        result.success(policyManager.clearKioskPolicies())
+                    }
+                    "isInLockTask" -> {
+                        result.success(policyManager.isInLockTask())
+                    }
+                    "isIgnoringBatteryOptimizations" -> {
+                        result.success(isIgnoringBatteryOptimizations())
+                    }
+                    "openBatteryOptimizationSettings" -> {
+                        result.success(openBatteryOptimizationSettings())
+                    }
+                    "openAutoStartSettings" -> {
+                        result.success(openAutoStartSettings())
                     }
                     "installApk" -> {
                         val path = call.argument<String>("path")
@@ -87,6 +129,27 @@ class MainActivity : FlutterActivity() {
                             result.success(false)
                         } else {
                             result.success(installApkFile(File(path)))
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PUSH_BRIDGE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "syncPushContext" -> {
+                        val api = call.argument<String>("apiBaseUrl")
+                        val token = call.argument<String>("accessToken")
+                        val deviceId = call.argument<String>("deviceId")
+                        PushContextStore.sync(this, api, token, deviceId)
+                        result.success(null)
+                    }
+                    "pushDedupeTryConsume" -> {
+                        val id = call.argument<String>("announcementId").orEmpty()
+                        if (id.isEmpty()) {
+                            result.success(false)
+                        } else {
+                            result.success(PushDedupe.tryConsume(applicationContext, id))
                         }
                     }
                     else -> result.notImplemented()
@@ -109,24 +172,6 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
-    }
-
-    private fun tryStartLockTask(): Boolean = try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            startLockTask()
-        }
-        true
-    } catch (_: Exception) {
-        false
-    }
-
-    private fun tryStopLockTask(): Boolean = try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            stopLockTask()
-        }
-        true
-    } catch (_: Exception) {
-        false
     }
 
     override fun onPostResume() {
@@ -169,8 +214,22 @@ class MainActivity : FlutterActivity() {
         window.attributes = lp
     }
 
-    private fun wakeApp() {
-        CommandRelay.wakeApp(this, this)
+    private fun dispatchWakeAppViaForegroundService(): Boolean {
+        return try {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, KioskForegroundService::class.java).apply {
+                    action = KioskForegroundService.ACTION_WAKE
+                },
+            )
+            true
+        } catch (_: Exception) {
+            wakeApp()
+        }
+    }
+
+    private fun wakeApp(): Boolean {
+        return CommandRelay.wakeApp(this)
     }
 
     /**
@@ -179,13 +238,18 @@ class MainActivity : FlutterActivity() {
      * Do not call [Runtime.exit] here: it tears down the VM immediately so the new
      * task often never comes up — looks like "app closes but does not restart" on device and emulator.
      */
-    private fun restartApp() {
-        val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return
-        intent.addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK,
-        )
-        startActivity(intent)
-        finishAffinity()
+    private fun restartApp(): Boolean {
+        return try {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+                ?: Intent(this, MainActivity::class.java)
+            intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK,
+            )
+            startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun installApkFile(file: File): Boolean = try {
@@ -220,6 +284,77 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val DEVICE_CHANNEL = "vertisignage/device"
         private const val KIOSK_CHANNEL = "vertisignage/kiosk"
+        private const val PUSH_BRIDGE_CHANNEL = "vertisignage/push_bridge"
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun openBatteryOptimizationSettings(): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            startActivity(
+                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+            true
+        } else {
+            false
+        }
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun openAutoStartSettings(): Boolean {
+        val candidates = listOf(
+            Intent().setClassName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            ),
+            Intent().setClassName(
+                "com.coloros.safecenter",
+                "com.coloros.safecenter.permission.startup.StartupAppListActivity",
+            ),
+            Intent().setClassName(
+                "com.oppo.safe",
+                "com.oppo.safe.permission.startup.StartupAppListActivity",
+            ),
+            Intent().setClassName(
+                "com.iqoo.secure",
+                "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity",
+            ),
+            Intent().setClassName(
+                "com.vivo.permissionmanager",
+                "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+            ),
+        )
+
+        for (intent in candidates) {
+            try {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (intent.resolveActivity(packageManager) != null) {
+                    startActivity(intent)
+                    return true
+                }
+            } catch (_: Exception) {
+                // try next vendor-specific settings activity
+            }
+        }
+
+        return try {
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", packageName, null)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun canDrawOverlays(): Boolean {
@@ -237,6 +372,7 @@ class MainActivity : FlutterActivity() {
         untilDismissed: Boolean,
         durationSec: Int,
         opacity: Double,
+        scheduleEndsAtEpochMs: Long = 0L,
     ): Boolean {
         if (!canDrawOverlays()) return false
         CommandRelay.showOverlay(
@@ -247,6 +383,7 @@ class MainActivity : FlutterActivity() {
             untilDismissed = untilDismissed,
             durationSec = durationSec,
             opacity = opacity,
+            scheduleEndEpochMs = scheduleEndsAtEpochMs,
         )
         wakeApp()
         return true

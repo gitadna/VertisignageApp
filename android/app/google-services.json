@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "000000000001",
+    "project_id": "vertisignage-placeholder-replace",
+    "storage_bucket": "vertisignage-placeholder-replace.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000001:android:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "android_client_info": {
+          "package_name": "com.example.vertisignage"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "replace-with-firebase-console-android-key"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -119,6 +119,9 @@ class OverlayShowCommand extends RealtimeCommand {
     this.untilDismissed = true,
     this.durationSec = 10,
     this.opacity = 0.9,
+    this.commandType,
+    this.contentType,
+    this.createdAt,
   });
 
   final String messageId;
@@ -128,6 +131,9 @@ class OverlayShowCommand extends RealtimeCommand {
   final bool untilDismissed;
   final int durationSec;
   final double opacity;
+  final String? commandType;
+  final String? contentType;
+  final DateTime? createdAt;
 }
 
 class OverlayHideCommand extends RealtimeCommand {
@@ -147,6 +153,10 @@ class AnnouncementCommand extends RealtimeCommand {
     this.mediaKind,
     this.mode,
     this.untilDismissed = false,
+    this.commandType,
+    this.contentType,
+    this.createdAt,
+    this.scheduleEndsAtUtc,
   });
 
   final String announcementId;
@@ -159,6 +169,11 @@ class AnnouncementCommand extends RealtimeCommand {
   final String? mediaKind;
   final String? mode;
   final bool untilDismissed;
+  final String? commandType;
+  final String? contentType;
+  final DateTime? createdAt;
+  /// When set, kiosk loops announcement media until this instant (UTC).
+  final DateTime? scheduleEndsAtUtc;
 }
 
 class AnnouncementClearCommand extends RealtimeCommand {
@@ -277,10 +292,14 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
       case 'OVERLAY_SHOW':
         if (payload is! Map<String, dynamic>) return null;
         final mid = payload['messageId'] as String?;
-        final text = payload['text'] as String?;
-        if (mid == null || text == null || text.trim().isEmpty) return null;
-        final mediaUrl = payload['mediaUrl'] as String?;
-        final mediaKind = payload['mediaKind'] as String?;
+        final text = (payload['text'] as String?)?.trim() ?? '';
+        if (mid == null) return null;
+        final rawMedia = payload['mediaUrl'] ?? payload['imageUrl'];
+        final mediaUrl = rawMedia is String && rawMedia.trim().isNotEmpty
+            ? rawMedia.trim()
+            : null;
+        final mediaKindRaw = payload['mediaKind'] as String?;
+        final mediaKind = mediaKindRaw?.trim().toLowerCase();
         final untilDismissed = payload['untilDismissed'] == null
             ? true
             : payload['untilDismissed'] == true;
@@ -288,14 +307,18 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final durationSec = durationRaw is num ? durationRaw.round() : 10;
         final opacityRaw = payload['opacity'];
         final opacity = opacityRaw is num ? opacityRaw.toDouble() : 0.9;
+        final createdAtRaw = payload['createdAt'] as String?;
         return OverlayShowCommand(
           messageId: mid,
-          text: text.trim(),
+          text: text,
           mediaUrl: mediaUrl,
           mediaKind: mediaKind,
           untilDismissed: untilDismissed,
           durationSec: durationSec.clamp(3, 1200),
           opacity: opacity.clamp(0.5, 1).toDouble(),
+          commandType: payload['commandType'] as String?,
+          contentType: payload['contentType'] as String?,
+          createdAt: createdAtRaw != null ? DateTime.tryParse(createdAtRaw) : null,
         );
       case 'OVERLAY_HIDE':
         if (payload is! Map<String, dynamic>) return null;
@@ -314,9 +337,12 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final mediaUrl = rawMedia is String && rawMedia.trim().isNotEmpty
             ? rawMedia.trim()
             : null;
-        final mediaKind = payload['mediaKind'] as String?;
+        final mediaKindRaw = payload['mediaKind'] as String?;
+        final mediaKind = mediaKindRaw?.trim().toLowerCase();
         final mode = payload['mode'] as String?;
         final untilDismissed = payload['untilDismissed'] == true;
+        final createdAtRaw = payload['createdAt'] as String?;
+        final scheduleEndsRaw = payload['scheduleEndsAt'] as String?;
         return AnnouncementCommand(
           announcementId: aid,
           title: (title == null || title.isEmpty) ? 'Announcement' : title,
@@ -326,6 +352,11 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
           mediaKind: mediaKind,
           mode: mode,
           untilDismissed: untilDismissed,
+          commandType: payload['commandType'] as String?,
+          contentType: payload['contentType'] as String?,
+          createdAt: createdAtRaw != null ? DateTime.tryParse(createdAtRaw)?.toUtc() : null,
+          scheduleEndsAtUtc:
+              scheduleEndsRaw != null ? DateTime.tryParse(scheduleEndsRaw)?.toUtc() : null,
         );
       case 'ANNOUNCEMENT_CLEAR':
         if (payload is! Map<String, dynamic>) return const AnnouncementClearCommand();

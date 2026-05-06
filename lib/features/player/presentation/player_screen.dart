@@ -105,7 +105,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (Platform.isAndroid &&
         sl<EnvironmentConfig>().kioskLockTask &&
         sl<TokenStore>().hasPairedDevice) {
-      unawaited(sl<DeviceService>().setLockTaskEnabled(true));
+      final device = sl<DeviceService>();
+      if (await device.isDeviceOwner()) {
+        unawaited(device.applyKioskPoliciesAndEnter());
+      }
     }
 
     widget.controller.start();
@@ -149,7 +152,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _pairAgain() async {
     final env = sl<EnvironmentConfig>();
     if (Platform.isAndroid && env.kioskLockTask) {
-      unawaited(sl<DeviceService>().setLockTaskEnabled(false));
+      final device = sl<DeviceService>();
+      if (await device.isDeviceOwner()) {
+        unawaited(device.exitKioskAndClearPolicies());
+      }
     }
     await sl<TokenStore>().invalidateDeviceSession();
   }
@@ -157,7 +163,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _resetApp() async {
     final env = sl<EnvironmentConfig>();
     if (Platform.isAndroid && env.kioskLockTask) {
-      unawaited(sl<DeviceService>().setLockTaskEnabled(false));
+      final device = sl<DeviceService>();
+      if (await device.isDeviceOwner()) {
+        unawaited(device.exitKioskAndClearPolicies());
+      }
     }
     await sl<MediaCacheService>().clearDiskCache();
     await sl<TokenStore>().invalidateDeviceSession();
@@ -165,6 +174,79 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (Platform.isAndroid) {
       await sl<DeviceService>().restartApplication();
     }
+  }
+
+  Future<void> _showStartupDiagnostics() async {
+    if (!Platform.isAndroid) return;
+    final device = sl<DeviceService>();
+    final ignoringBatteryOptimization =
+        await device.isIgnoringBatteryOptimizations();
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Startup diagnostics'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _StatusLine(
+              label: 'Boot auto-start receiver',
+              ok: true,
+              okText: 'Configured',
+              failText: 'Missing',
+            ),
+            const SizedBox(height: 8),
+            _StatusLine(
+              label: 'Battery optimization',
+              ok: ignoringBatteryOptimization,
+              okText: 'Disabled for VertiSignage',
+              failText: 'Enabled (can block auto-start)',
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Tip: On some brands (Xiaomi/Oppo/Vivo/Realme), also allow Auto-start in system settings.',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () async {
+              final opened = await device.openAutoStartSettings();
+              if (!mounted) return;
+              if (!opened) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Could not open Auto-start settings.'),
+                  ),
+                );
+              }
+            },
+            child: const Text('Auto-start settings'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final opened = await device.openBatteryOptimizationSettings();
+              if (!mounted) return;
+              if (!opened) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content:
+                        Text('Could not open Battery optimization settings.'),
+                  ),
+                );
+              }
+            },
+            child: const Text('Battery settings'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _confirmAndRun({
@@ -292,6 +374,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                               run: _resetApp,
                             ),
                           ),
+                          onStartupDiagnostics: () =>
+                              unawaited(_showStartupDiagnostics()),
                         );
                       },
                     ),
@@ -503,6 +587,43 @@ class _PlaylistIdleOverlay extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _StatusLine extends StatelessWidget {
+  const _StatusLine({
+    required this.label,
+    required this.ok,
+    required this.okText,
+    required this.failText,
+  });
+
+  final String label;
+  final bool ok;
+  final String okText;
+  final String failText;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final color = ok ? Colors.green.shade400 : cs.error;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          ok ? Icons.check_circle_outline : Icons.error_outline,
+          color: color,
+          size: 18,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '$label: ${ok ? okText : failText}',
+            style: TextStyle(color: cs.onSurface),
+          ),
+        ),
+      ],
     );
   }
 }

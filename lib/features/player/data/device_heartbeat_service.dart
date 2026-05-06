@@ -177,6 +177,11 @@ class DeviceHeartbeatService {
     try {
       final cacheMb = await _cache.approximateCacheSizeMb();
       final payload = Map<String, dynamic>.from(data);
+      final isOwner = await _device.isDeviceOwner();
+      final inLockTask = await _device.isInLockTask();
+      payload['supportsDeviceOwner'] = true;
+      payload['deviceOwner'] = isOwner;
+      payload['kioskMode'] = isOwner && inLockTask;
       payload['overlayPermissionGranted'] = await _device.canDrawOverlays();
       if (cacheMb != null) {
         payload['cacheUsedMb'] = cacheMb;

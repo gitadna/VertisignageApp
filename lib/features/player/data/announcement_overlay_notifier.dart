@@ -13,10 +13,14 @@ enum AnnouncementRenderMode { overlay, ticker }
 
 /// Full-screen announcement from realtime `ANNOUNCEMENT`; auto-dismiss calls [onDismiss].
 ///
-/// If a new announcement replaces an active one, the timer resets without invoking the prior
+/// Content loops until [presentationEndsAtUtc], until wall-clock [durationSec] elapses (when not
+/// [untilDismissed]), or until [AnnouncementClearCommand] / hide clears it while [untilDismissed].
+///
+/// If a new announcement replaces an active one, timers reset without invoking the prior
 /// [onDismiss] so playback stays frozen until the latest finishes.
 class AnnouncementOverlayNotifier extends ChangeNotifier {
-  Timer? _timer;
+  Timer? _deadlineTicker;
+
   VoidCallback? _onDismiss;
 
   String? _id;
@@ -26,6 +30,9 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
   String _title = 'Announcement';
   String? _body;
   bool _untilDismissed = false;
+  int _wallClockDurationSec = 15;
+  DateTime? _shownAtUtc;
+  DateTime? _presentationEndsAtUtc;
 
   String? get announcementId => _id;
   AnnouncementMediaKind get mediaKind => _mediaKind;
@@ -46,10 +53,11 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
     required bool untilDismissed,
     AnnouncementMediaKind mediaKind = AnnouncementMediaKind.none,
     String? mediaUrl,
+    DateTime? presentationEndsAtUtc,
     required VoidCallback onDismiss,
   }) {
-    _timer?.cancel();
-    _timer = null;
+    _deadlineTicker?.cancel();
+    _deadlineTicker = null;
 
     _id = announcementId;
     final trimmed = mediaUrl?.trim();
@@ -64,22 +72,52 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
     _title = title;
     _body = body;
     _untilDismissed = untilDismissed;
+    _wallClockDurationSec = durationSec.clamp(3, 600);
+    _shownAtUtc = DateTime.now().toUtc();
+    _presentationEndsAtUtc = presentationEndsAtUtc;
 
     _onDismiss = onDismiss;
 
     notifyListeners();
-
-    if (!untilDismissed) {
-      final ms = (durationSec.clamp(3, 600) * 1000).toInt();
-      _timer = Timer(Duration(milliseconds: ms), _finishFromTimer);
-    }
+    _startDeadlineTicker();
+    _maybeExpiredImmediately();
   }
 
   void dismissManual() => _finishFromTimer();
 
+  DateTime? _resolveDeadlineUtc() {
+    if (_presentationEndsAtUtc != null) return _presentationEndsAtUtc;
+    if (_untilDismissed) return null;
+    final start = _shownAtUtc;
+    if (start == null) return null;
+    return start.add(Duration(seconds: _wallClockDurationSec));
+  }
+
+  void _maybeExpiredImmediately() {
+    final end = _resolveDeadlineUtc();
+    if (end == null) return;
+    if (!DateTime.now().toUtc().isBefore(end)) {
+      _finishFromTimer();
+    }
+  }
+
+  void _startDeadlineTicker() {
+    _deadlineTicker?.cancel();
+    if (_resolveDeadlineUtc() == null) return;
+
+    _deadlineTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_id == null) return;
+      final deadline = _resolveDeadlineUtc();
+      if (deadline == null) return;
+      if (!DateTime.now().toUtc().isBefore(deadline)) {
+        _finishFromTimer();
+      }
+    });
+  }
+
   void _finishFromTimer() {
-    _timer?.cancel();
-    _timer = null;
+    _deadlineTicker?.cancel();
+    _deadlineTicker = null;
     if (_id == null) return;
 
     _id = null;
@@ -89,6 +127,9 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
     _title = 'Announcement';
     _body = null;
     _untilDismissed = false;
+    _wallClockDurationSec = 15;
+    _shownAtUtc = null;
+    _presentationEndsAtUtc = null;
 
     final cb = _onDismiss;
     _onDismiss = null;

@@ -1,10 +1,8 @@
 package com.example.vertisignage
 
-import android.app.Activity
-import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
-import android.os.PowerManager
+import androidx.core.content.ContextCompat
 
 object CommandRelay {
     const val ACTION_WAKE = "com.example.vertisignage.ACTION_WAKE"
@@ -18,24 +16,41 @@ object CommandRelay {
     const val EXTRA_DURATION_SEC = "durationSec"
     const val EXTRA_OPACITY = "opacity"
 
-    fun wakeApp(context: Context, activity: Activity? = null) {
-        wakeScreen(context)
-        dismissKeyguard(context, activity)
-        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return
-        launch.addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
-        )
-        context.startActivity(launch)
+    fun wakeApp(context: Context): Boolean {
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        if (launch != null) {
+            try {
+                launch.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                )
+                context.startActivity(launch)
+                return true
+            } catch (_: Exception) {
+                // Fall back to explicit activity launch below.
+            }
+        }
+
+        return try {
+            val explicit = Intent(context, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                )
+            }
+            context.startActivity(explicit)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun hideOverlay(context: Context) {
-        val intent = Intent(context, OverlayWindowService::class.java).apply {
-            action = OverlayWindowService.ACTION_HIDE
-        }
-        context.startService(intent)
+        context.stopService(Intent(context, OverlayWindowService::class.java))
     }
 
     fun showOverlay(
@@ -46,6 +61,7 @@ object CommandRelay {
         untilDismissed: Boolean,
         durationSec: Int,
         opacity: Double,
+        scheduleEndEpochMs: Long = 0L,
     ) {
         val intent = Intent(context, OverlayWindowService::class.java).apply {
             action = OverlayWindowService.ACTION_SHOW
@@ -55,32 +71,9 @@ object CommandRelay {
             putExtra(OverlayWindowService.EXTRA_UNTIL_DISMISSED, untilDismissed)
             putExtra(OverlayWindowService.EXTRA_DURATION_SEC, durationSec)
             putExtra(OverlayWindowService.EXTRA_OPACITY, opacity)
+            putExtra(OverlayWindowService.EXTRA_SCHEDULE_END_EPOCH_MS, scheduleEndEpochMs)
         }
-        context.startService(intent)
+        ContextCompat.startForegroundService(context, intent)
     }
 
-    private fun wakeScreen(context: Context) {
-        try {
-            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-            @Suppress("DEPRECATION")
-            val wl = pm.newWakeLock(
-                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                    PowerManager.ON_AFTER_RELEASE,
-                "vertisignage:relayWake",
-            )
-            wl.acquire(4000L)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun dismissKeyguard(context: Context, activity: Activity?) {
-        try {
-            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-            if (activity != null) {
-                km.requestDismissKeyguard(activity, null)
-            }
-        } catch (_: Exception) {
-        }
-    }
 }

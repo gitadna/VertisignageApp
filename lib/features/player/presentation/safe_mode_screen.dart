@@ -36,7 +36,10 @@ class _SafeModeScreenState extends State<SafeModeScreen> {
     if (Platform.isAndroid &&
         sl<EnvironmentConfig>().kioskLockTask &&
         sl<TokenStore>().hasPairedDevice) {
-      unawaited(sl<DeviceService>().setLockTaskEnabled(true));
+      final device = sl<DeviceService>();
+      if (await device.isDeviceOwner()) {
+        unawaited(device.applyKioskPoliciesAndEnter());
+      }
     }
   }
 

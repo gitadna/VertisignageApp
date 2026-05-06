@@ -39,5 +39,14 @@ void main() {
     test('returns null for unknown type', () {
       expect(parseRealtimeCommand('{"type":"UNKNOWN"}'), isNull);
     });
+
+    test('parses ANNOUNCEMENT scheduleEndsAt', () {
+      final cmd = parseRealtimeCommand(
+        '{"type":"ANNOUNCEMENT","payload":{"announcementId":"a1","title":"T","durationSec":15,"scheduleEndsAt":"2026-05-05T18:00:00.000Z"}}',
+      );
+      expect(cmd, isA<AnnouncementCommand>());
+      final a = cmd as AnnouncementCommand;
+      expect(a.scheduleEndsAtUtc?.toIso8601String(), '2026-05-05T18:00:00.000Z');
+    });
   });
 }

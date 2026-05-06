@@ -3,8 +3,10 @@ import 'dart:collection';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../../../core/config/environment_config.dart';
 import '../../../core/logging/kiosk_log.dart';
 import '../../../core/websocket/realtime_client.dart';
 import '../../../core/websocket/realtime_command.dart';
@@ -29,6 +31,7 @@ class RealtimeDispatcher {
     required PlayerController player,
     required TokenStore tokenStore,
     required DeviceService device,
+    required EnvironmentConfig env,
     required KioskFleetApi fleetApi,
     required MediaCacheService cache,
     required OtaUpdateService ota,
@@ -40,6 +43,7 @@ class RealtimeDispatcher {
         _player = player,
         _tokenStore = tokenStore,
         _device = device,
+        _env = env,
         _fleetApi = fleetApi,
         _cache = cache,
         _ota = ota,
@@ -52,14 +56,14 @@ class RealtimeDispatcher {
   final PlayerController _player;
   final TokenStore _tokenStore;
   final DeviceService _device;
+  final EnvironmentConfig _env;
   final KioskFleetApi _fleetApi;
   final MediaCacheService _cache;
   final OtaUpdateService _ota;
   final PlayerTelemetry _telemetry;
-  Timer? _overlayAutoHideTimer;
+  DateTime? _activeOverlayCreatedAt;
 
   final LinkedHashSet<String> _recentMessageIds = LinkedHashSet<String>();
-  final LinkedHashSet<String> _recentAnnouncementIds = LinkedHashSet<String>();
 
   // Subscription is held for the process lifetime; [dispose] intentionally no-ops.
   // ignore: unused_field
@@ -90,13 +94,77 @@ class RealtimeDispatcher {
     return false;
   }
 
-  bool _dedupeAnnouncement(String announcementId) {
-    if (_recentAnnouncementIds.contains(announcementId)) return true;
-    _recentAnnouncementIds.add(announcementId);
-    while (_recentAnnouncementIds.length > 64) {
-      _recentAnnouncementIds.remove(_recentAnnouncementIds.first);
+  bool _canApplyIncoming(DateTime? createdAt) {
+    if (createdAt == null) return true;
+    final active = _activeOverlayCreatedAt;
+    if (active == null) return true;
+    return !createdAt.isBefore(active);
+  }
+
+  Future<bool> _waitForForeground({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final state = WidgetsBinding.instance.lifecycleState;
+      if (state == null || state == AppLifecycleState.resumed) {
+        return true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
     }
-    return false;
+    return WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+  }
+
+  String? _resolveMediaUrl(String? rawUrl) {
+    final raw = rawUrl?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = Uri.tryParse(raw);
+    final baseRaw = _env.apiBaseUrl.trim();
+    final baseNoApi = baseRaw.replaceAll(RegExp(r'/api/?$'), '');
+    final base = Uri.tryParse(baseNoApi);
+    if (parsed != null && (parsed.isScheme('http') || parsed.isScheme('https'))) {
+      if (base != null &&
+          (parsed.host == 'localhost' ||
+              parsed.host == '127.0.0.1' ||
+              parsed.host == '::1')) {
+        return parsed.replace(
+          scheme: base.scheme,
+          host: base.host,
+          port: base.hasPort ? base.port : null,
+        ).toString();
+      }
+      return parsed.toString();
+    }
+    if (base == null || !(base.isScheme('http') || base.isScheme('https'))) {
+      return null;
+    }
+    final rel = raw.startsWith('/') ? raw : '/$raw';
+    return base.resolve(rel).toString();
+  }
+
+  AnnouncementMediaKind _inferMediaKind({
+    required String? mediaUrl,
+    required String? mediaKindHint,
+    required String? contentTypeHint,
+  }) {
+    if (mediaUrl == null || mediaUrl.isEmpty) return AnnouncementMediaKind.none;
+    final kind = mediaKindHint?.trim().toLowerCase();
+    if (kind == 'video') return AnnouncementMediaKind.video;
+    if (kind == 'image') return AnnouncementMediaKind.image;
+
+    final contentType = contentTypeHint?.trim().toLowerCase();
+    if (contentType != null && contentType.startsWith('video/')) {
+      return AnnouncementMediaKind.video;
+    }
+    if (contentType != null && contentType.startsWith('image/')) {
+      return AnnouncementMediaKind.image;
+    }
+
+    final lowerUrl = mediaUrl.toLowerCase();
+    if (RegExp(r'\.(mp4|webm|m3u8|mov)(\?|$)').hasMatch(lowerUrl)) {
+      return AnnouncementMediaKind.video;
+    }
+    return AnnouncementMediaKind.image;
   }
 
   void _onMessage(RealtimeMessage m) {
@@ -178,48 +246,40 @@ class RealtimeDispatcher {
 
     if (cmd is OverlayShowCommand) {
       if (_dedupe(cmd.messageId)) return;
-      final ok = await _device.showOverlay(
-        text: cmd.text,
-        mediaUrl: cmd.mediaUrl,
-        mediaKind: cmd.mediaKind,
-        untilDismissed: cmd.untilDismissed,
-        durationSec: cmd.durationSec,
-        opacity: cmd.opacity,
+      if (!_canApplyIncoming(cmd.createdAt)) return;
+      _activeOverlayCreatedAt = cmd.createdAt ?? DateTime.now().toUtc();
+      await _device.wakeAppToForeground();
+      final overlayUrl = _resolveMediaUrl(cmd.mediaUrl);
+      final fallbackKind = _inferMediaKind(
+        mediaUrl: overlayUrl,
+        mediaKindHint: cmd.mediaKind,
+        contentTypeHint: cmd.contentType,
       );
-      if (!ok) {
-        // Fallback to in-app announcement overlay when native draw-over-apps is unavailable.
-        _player.beginAnnouncementHold();
-        _announcementOverlay.show(
-          announcementId: 'overlay-fallback-${cmd.messageId}',
-          durationSec: cmd.durationSec,
-          untilDismissed: false,
-          mode: AnnouncementRenderMode.overlay,
-          title: cmd.text,
-          body: null,
-          mediaKind: AnnouncementMediaKind.none,
-          mediaUrl: null,
-          onDismiss: _player.endAnnouncementHold,
-        );
-      }
+      _player.beginAnnouncementHold();
+      _announcementOverlay.show(
+        announcementId: 'overlay-fallback-${cmd.messageId}',
+        durationSec: cmd.durationSec,
+        untilDismissed: cmd.untilDismissed,
+        mode: AnnouncementRenderMode.overlay,
+        title: cmd.text,
+        body: null,
+        mediaKind: fallbackKind,
+        mediaUrl: fallbackKind == AnnouncementMediaKind.none ? null : overlayUrl,
+        onDismiss: _player.endAnnouncementHold,
+      );
       await _fleetApi.postCommandAck(
         messageId: cmd.messageId,
         commandType: 'OVERLAY_SHOW',
-        ok: ok,
-        detail: <String, dynamic>{'overlayPermission': await _device.canDrawOverlays()},
+        ok: true,
+        detail: <String, dynamic>{'path': 'in_app_overlay'},
       );
-      if (ok && !cmd.untilDismissed) {
-        _overlayAutoHideTimer?.cancel();
-        _overlayAutoHideTimer = Timer(Duration(seconds: cmd.durationSec), () {
-          unawaited(_device.hideOverlay());
-        });
-      }
       return;
     }
 
     if (cmd is OverlayHideCommand) {
       if (_dedupe(cmd.messageId)) return;
-      _overlayAutoHideTimer?.cancel();
-      _overlayAutoHideTimer = null;
+      _activeOverlayCreatedAt = null;
+      _announcementOverlay.dismissManual();
       await _device.hideOverlay();
       await _fleetApi.postCommandAck(
         messageId: cmd.messageId,
@@ -234,33 +294,55 @@ class RealtimeDispatcher {
       return;
     }
     if (cmd is AnnouncementCommand) {
-      if (_dedupeAnnouncement(cmd.announcementId)) return;
+      if (!await _device.pushDedupeTryConsume(cmd.announcementId)) return;
+      if (!_canApplyIncoming(cmd.createdAt)) return;
+      _activeOverlayCreatedAt = cmd.createdAt ?? DateTime.now().toUtc();
       _player.beginAnnouncementHold();
-      final url = cmd.mediaUrl;
-      final kind =
-          (url != null && url.isNotEmpty)
-              ? (cmd.mediaKind == 'video'
-                  ? AnnouncementMediaKind.video
-                  : AnnouncementMediaKind.image)
-              : AnnouncementMediaKind.none;
+      final url = _resolveMediaUrl(cmd.mediaUrl);
+      final kind = _inferMediaKind(
+        mediaUrl: url,
+        mediaKindHint: cmd.mediaKind,
+        contentTypeHint: cmd.contentType,
+      );
+      final renderMode = cmd.mode == 'ticker'
+          ? AnnouncementRenderMode.ticker
+          : AnnouncementRenderMode.overlay;
+
+      if (renderMode == AnnouncementRenderMode.overlay) {
+        await _device.wakeAppToForeground();
+        final nativeMediaKind = switch (kind) {
+          AnnouncementMediaKind.video => 'video',
+          AnnouncementMediaKind.image => 'image',
+          AnnouncementMediaKind.none => null,
+        };
+        await _device.showOverlay(
+          text: cmd.title,
+          mediaUrl: kind == AnnouncementMediaKind.none ? null : url,
+          mediaKind: nativeMediaKind,
+          untilDismissed: cmd.untilDismissed,
+          durationSec: cmd.durationSec,
+          scheduleEndsAtEpochMs: cmd.scheduleEndsAtUtc?.millisecondsSinceEpoch,
+        );
+      }
 
       _announcementOverlay.show(
         announcementId: cmd.announcementId,
         durationSec: cmd.durationSec,
         untilDismissed: cmd.untilDismissed,
-        mode: cmd.mode == 'ticker'
-            ? AnnouncementRenderMode.ticker
-            : AnnouncementRenderMode.overlay,
+        mode: renderMode,
         title: cmd.title,
         body: cmd.body,
         mediaKind: kind,
         mediaUrl: url,
+        presentationEndsAtUtc: cmd.scheduleEndsAtUtc,
         onDismiss: _player.endAnnouncementHold,
       );
       return;
     }
     if (cmd is AnnouncementClearCommand) {
+      _activeOverlayCreatedAt = null;
       _announcementOverlay.dismissManual();
+      await _device.hideOverlay();
       return;
     }
 
@@ -305,17 +387,74 @@ class RealtimeDispatcher {
       return;
     }
     if (cmd is WakeAppCommand) {
-      await _device.wakeAppToForeground();
+      final launchDispatched = await _device.wakeAppToForeground();
+      final resumed = launchDispatched && await _waitForForeground();
+      final lifecycle = WidgetsBinding.instance.lifecycleState?.name;
       await _fleetApi.postCommandAck(
         messageId: cmd.messageId,
         commandType: 'WAKE_APP',
-        ok: true,
-        detail: <String, dynamic>{'reason': cmd.reason ?? 'admin_wake'},
+        ok: resumed,
+        detail: <String, dynamic>{
+          'reason': cmd.reason ?? 'admin_wake',
+          'path': resumed ? 'wake_foreground' : 'wake_failed',
+          'launchDispatched': launchDispatched,
+          'lifecycleState': lifecycle ?? 'unknown',
+        },
       );
       return;
     }
     if (cmd is RestartAppCommand) {
       await _device.restartApplication();
+    }
+  }
+
+  /// Parses a full `{ "type", "payload" }` JSON frame (WebSocket or FCM `vs_payload`).
+  Future<void> dispatchRealtimePayload(String rawJson) async {
+    try {
+      final cmd = parseRealtimeCommand(rawJson);
+      if (cmd != null) await _dispatch(cmd);
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('RealtimeDispatcher.dispatchRealtimePayload error: $e\n$st');
+      }
+    }
+  }
+
+  /// Routes FCM data keys when they reach Flutter (e.g. ticker, CLEAR forward, or fallback delivery).
+  ///
+  /// Android typically intercepts `ANNOUNCEMENT` in native code first; killed-state overlays still
+  /// use Kotlin [VertiPushCommandHandler] + [OverlayWindowService].
+  Future<void> dispatchFromFcmData(Map<String, dynamic> data) async {
+    final vsCmd = data['vs_cmd']?.toString();
+    if (vsCmd == null) return;
+
+    try {
+      if (vsCmd == 'ANNOUNCEMENT') {
+        final payload = data['vs_payload']?.toString();
+        if (payload != null && payload.isNotEmpty) {
+          await dispatchRealtimePayload(payload);
+        }
+        return;
+      }
+      if (vsCmd == 'ANNOUNCEMENT_REF') {
+        final id = data['vs_announcement_id']?.toString();
+        if (id == null || id.isEmpty) return;
+        final raw = await _fleetApi.fetchAnnouncementWireJson(id);
+        if (raw != null) await dispatchRealtimePayload(raw);
+        return;
+      }
+      if (vsCmd == 'ANNOUNCEMENT_CLEAR') {
+        final aid = data['vs_announcement_id']?.toString();
+        await _dispatch(
+          AnnouncementClearCommand(
+            announcementId: (aid != null && aid.isNotEmpty) ? aid : null,
+          ),
+        );
+      }
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('RealtimeDispatcher.dispatchFromFcmData error: $e\n$st');
+      }
     }
   }
 

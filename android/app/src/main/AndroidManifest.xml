@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
@@ -34,11 +35,25 @@
 
         <receiver
             android:name=".BootReceiver"
-            android:exported="true">
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".VertiDeviceAdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin_receiver" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
 
@@ -47,20 +62,21 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback"/>
         <service
-            android:name=".CommandRelayService"
-            android:exported="false"/>
-        <service
             android:name=".OverlayWindowService"
-            android:exported="false"/>
-        <receiver
-            android:name=".CommandRelayReceiver"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"/>
+
+        <service
+            android:name="io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService"
+            android:exported="false"
+            tools:node="remove" />
+        <service
+            android:name=".VertiFirebaseMessagingService"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.example.vertisignage.ACTION_WAKE"/>
-                <action android:name="com.example.vertisignage.ACTION_OVERLAY_SHOW"/>
-                <action android:name="com.example.vertisignage.ACTION_OVERLAY_HIDE"/>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
-        </receiver>
+        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:dio/dio.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:get_it/get_it.dart';
 
 import '../../../core/config/environment_config.dart';
@@ -86,6 +90,7 @@ void registerPlayerModule(GetIt getIt) {
       player: getIt<PlayerController>(),
       tokenStore: getIt<TokenStore>(),
       device: getIt<DeviceService>(),
+      env: getIt<EnvironmentConfig>(),
       fleetApi: getIt<KioskFleetApi>(),
       cache: getIt<MediaCacheService>(),
       ota: getIt<OtaUpdateService>(),
@@ -100,4 +105,14 @@ void registerPlayerModule(GetIt getIt) {
       realtime: getIt<RealtimeClient>(),
     ),
   );
+
+  if (Platform.isAndroid) {
+    FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
+      unawaited(
+        getIt<RealtimeDispatcher>().dispatchFromFcmData(
+          Map<String, dynamic>.from(msg.data),
+        ),
+      );
+    });
+  }
 }

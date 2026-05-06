@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
 import '../../../services/token_store.dart';
@@ -30,6 +32,51 @@ class KioskFleetApi {
     } catch (_) {
       return false;
     }
+  }
+
+  Future<bool> postPushToken({
+    required String token,
+    String platform = 'android',
+  }) async {
+    final device = _tokenStore.loadPairedDevice();
+    final access = _tokenStore.accessToken;
+    if (device == null || access == null || access.isEmpty || token.isEmpty) {
+      return false;
+    }
+    try {
+      final res = await _dio.post<void>(
+        '/api/devices/${device.deviceId}/push-token',
+        data: <String, dynamic>{
+          'token': token,
+          'platform': platform,
+        },
+      );
+      final code = res.statusCode ?? 0;
+      return code >= 200 && code < 300;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Fetches `{ type, payload }` envelope for FCM `ANNOUNCEMENT_REF` (paired device JWT).
+  Future<String?> fetchAnnouncementWireJson(String announcementId) async {
+    final device = _tokenStore.loadPairedDevice();
+    final token = _tokenStore.accessToken;
+    if (device == null || token == null || token.isEmpty || announcementId.isEmpty) {
+      return null;
+    }
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/api/devices/${device.deviceId}/announcement-push/$announcementId',
+      );
+      final code = res.statusCode ?? 0;
+      if (code < 200 || code >= 300) return null;
+      final envelope = res.data?['data'];
+      if (envelope is Map<String, dynamic>) {
+        return jsonEncode(envelope);
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> postCommandAck({

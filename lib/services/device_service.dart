@@ -9,10 +9,12 @@ import '../core/logging/kiosk_log.dart';
 class DeviceService {
   DeviceService()
       : _device = const MethodChannel('vertisignage/device'),
-        _kiosk = const MethodChannel('vertisignage/kiosk');
+        _kiosk = const MethodChannel('vertisignage/kiosk'),
+        _pushBridge = const MethodChannel('vertisignage/push_bridge');
 
   final MethodChannel _device;
   final MethodChannel _kiosk;
+  final MethodChannel _pushBridge;
 
   /// Music stream volume 0–100.
   Future<void> setVolumePercent(int percent) async {
@@ -51,12 +53,14 @@ class DeviceService {
   }
 
   /// Relaunch the app via Android launcher intent (same fix as admin “Restart screen”).
-  Future<void> restartApplication() async {
-    if (!Platform.isAndroid) return;
+  Future<bool> restartApplication() async {
+    if (!Platform.isAndroid) return false;
     try {
-      await _device.invokeMethod<void>('restartApp');
+      final ok = await _device.invokeMethod<bool>('restartApp');
+      return ok ?? false;
     } catch (e, st) {
       KioskLog.e('DeviceService.restartApp', e, st);
+      return false;
     }
   }
 
@@ -72,15 +76,89 @@ class DeviceService {
     }
   }
 
-  /// Screen pinning / lock task (Android L+). May fail if not device owner.
+  /// Legacy lock-task toggle preserved for compatibility.
+  /// Prefer [applyKioskPoliciesAndEnter] and [exitKioskAndClearPolicies].
   Future<bool> setLockTaskEnabled(bool enabled) async {
+    if (enabled) return applyKioskPoliciesAndEnter();
+    return exitKioskAndClearPolicies();
+  }
+
+  Future<bool> isDeviceOwner() async {
     if (!Platform.isAndroid) return false;
     try {
-      final method = enabled ? 'startLockTask' : 'stopLockTask';
-      final ok = await _device.invokeMethod<bool>(method);
+      final ok = await _device.invokeMethod<bool>('isDeviceOwner');
       return ok ?? false;
     } catch (e, st) {
-      KioskLog.e('DeviceService.lockTask', e, st);
+      KioskLog.e('DeviceService.isDeviceOwner', e, st);
+      return false;
+    }
+  }
+
+  Future<bool> applyKioskPoliciesAndEnter() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final applied = await _device.invokeMethod<bool>('applyKioskPolicies');
+      if (applied != true) return false;
+      final entered = await _device.invokeMethod<bool>('startLockTask');
+      return entered ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.applyKiosk', e, st);
+      return false;
+    }
+  }
+
+  Future<bool> exitKioskAndClearPolicies() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final exited = await _device.invokeMethod<bool>('stopLockTask');
+      final cleared = await _device.invokeMethod<bool>('clearKioskPolicies');
+      return (exited ?? false) && (cleared ?? false);
+    } catch (e, st) {
+      KioskLog.e('DeviceService.exitKiosk', e, st);
+      return false;
+    }
+  }
+
+  Future<bool> isInLockTask() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final inLockTask = await _device.invokeMethod<bool>('isInLockTask');
+      return inLockTask ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.isInLockTask', e, st);
+      return false;
+    }
+  }
+
+  Future<bool> isIgnoringBatteryOptimizations() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final ok = await _device.invokeMethod<bool>('isIgnoringBatteryOptimizations');
+      return ok ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.isIgnoringBatteryOptimizations', e, st);
+      return false;
+    }
+  }
+
+  Future<bool> openBatteryOptimizationSettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final opened = await _device.invokeMethod<bool>('openBatteryOptimizationSettings');
+      return opened ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.openBatteryOptimizationSettings', e, st);
+      return false;
+    }
+  }
+
+  Future<bool> openAutoStartSettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final opened = await _device.invokeMethod<bool>('openAutoStartSettings');
+      return opened ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.openAutoStartSettings', e, st);
       return false;
     }
   }
@@ -95,12 +173,52 @@ class DeviceService {
     }
   }
 
-  Future<void> wakeAppToForeground() async {
-    if (!Platform.isAndroid) return;
+  Future<bool> wakeAppToForeground() async {
+    if (!Platform.isAndroid) return false;
     try {
-      await _device.invokeMethod<void>('wakeApp');
+      final ok = await _device.invokeMethod<bool>('wakeApp');
+      return ok ?? false;
     } catch (e, st) {
       KioskLog.e('DeviceService.wakeApp', e, st);
+      return false;
+    }
+  }
+
+  /// Persist API base URL + device JWT for native FCM fallback (overlay when Flutter is dead).
+  Future<void> syncPushContextForNative({
+    required String apiBaseUrl,
+    required String accessToken,
+    required String deviceId,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _pushBridge.invokeMethod<void>(
+        'syncPushContext',
+        <String, dynamic>{
+          'apiBaseUrl': apiBaseUrl.trim(),
+          'accessToken': accessToken.trim(),
+          'deviceId': deviceId.trim(),
+        },
+      );
+    } catch (e, st) {
+      KioskLog.e('DeviceService.syncPushContextForNative', e, st);
+    }
+  }
+
+  /// Shared with native [PushDedupe]: returns false if this announcement was already consumed (FCM/native).
+  Future<bool> pushDedupeTryConsume(String announcementId) async {
+    if (!Platform.isAndroid) return true;
+    final id = announcementId.trim();
+    if (id.isEmpty) return true;
+    try {
+      final ok = await _pushBridge.invokeMethod<bool>(
+        'pushDedupeTryConsume',
+        <String, dynamic>{'announcementId': id},
+      );
+      return ok ?? true;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.pushDedupeTryConsume', e, st);
+      return true;
     }
   }
 
@@ -122,6 +240,7 @@ class DeviceService {
     bool untilDismissed = true,
     int durationSec = 10,
     double opacity = 0.9,
+    int? scheduleEndsAtEpochMs,
   }) async {
     if (!Platform.isAndroid) return false;
     try {
@@ -134,6 +253,7 @@ class DeviceService {
           'untilDismissed': untilDismissed,
           'durationSec': durationSec,
           'opacity': opacity,
+          'scheduleEndsAtEpochMs': ?scheduleEndsAtEpochMs,
         },
       );
       return ok ?? false;

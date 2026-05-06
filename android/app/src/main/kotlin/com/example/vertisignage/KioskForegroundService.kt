@@ -8,15 +8,9 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
 
 class KioskForegroundService : Service() {
-    private val relaunchHandler = Handler(Looper.getMainLooper())
-    private var relaunchCheckRunnable: Runnable? = null
-
     override fun onCreate() {
         super.onCreate()
         createChannelIfNeeded()
@@ -34,46 +28,18 @@ class KioskForegroundService : Service() {
             @Suppress("DEPRECATION")
             startForeground(NOTIFICATION_ID, notification)
         }
+        if (intent?.action == ACTION_WAKE) {
+            CommandRelay.wakeApp(this)
+        }
         return START_STICKY
     }
 
-    override fun onBind(intent: Intent?) = null
-
     override fun onTaskRemoved(rootIntent: Intent?) {
+        CommandRelay.wakeApp(this)
         super.onTaskRemoved(rootIntent)
-        relaunchApp("task_removed")
-        // Reassert sticky foreground service for best-effort resilience when task is swiped away.
-        ContextCompat.startForegroundService(
-            this,
-            Intent(this, KioskForegroundService::class.java),
-        )
-        scheduleRelaunchGuard()
     }
 
-    override fun onDestroy() {
-        relaunchCheckRunnable?.let { relaunchHandler.removeCallbacks(it) }
-        relaunchCheckRunnable = null
-        super.onDestroy()
-    }
-
-    private fun relaunchApp(reason: String) {
-        val launch = packageManager.getLaunchIntentForPackage(packageName) ?: return
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        launch.putExtra("kiosk_relaunch_reason", reason)
-        startActivity(launch)
-    }
-
-    /**
-     * When recents-swipe and LMK race, app relaunch can be dropped.
-     * This one-shot delayed relaunch improves resilience without loops.
-     */
-    private fun scheduleRelaunchGuard() {
-        relaunchCheckRunnable?.let { relaunchHandler.removeCallbacks(it) }
-        relaunchCheckRunnable = Runnable {
-            relaunchApp("task_removed_guard")
-        }
-        relaunchHandler.postDelayed(relaunchCheckRunnable!!, 2500L)
-    }
+    override fun onBind(intent: Intent?) = null
 
     private fun createChannelIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -104,6 +70,9 @@ class KioskForegroundService : Service() {
     }
 
     companion object {
+        /** Starts MainActivity from foreground-service context (BAL-friendly). */
+        const val ACTION_WAKE = "com.example.vertisignage.KioskForegroundService.ACTION_WAKE"
+
         private const val NOTIFICATION_ID = 71001
         private const val CHANNEL_ID = "vertisignage_kiosk_fg"
     }
