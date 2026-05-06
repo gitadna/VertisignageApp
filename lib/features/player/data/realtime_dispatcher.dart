@@ -327,20 +327,8 @@ class RealtimeDispatcher {
 
       if (renderMode == AnnouncementRenderMode.overlay) {
         await _device.wakeAppToForeground();
-        final nativeMediaKind = switch (kind) {
-          AnnouncementMediaKind.video => 'video',
-          AnnouncementMediaKind.image => 'image',
-          AnnouncementMediaKind.url => 'url',
-          AnnouncementMediaKind.none => null,
-        };
-        await _device.showOverlay(
-          text: cmd.title,
-          mediaUrl: kind == AnnouncementMediaKind.none ? null : url,
-          mediaKind: nativeMediaKind,
-          untilDismissed: cmd.untilDismissed,
-          durationSec: cmd.durationSec,
-          scheduleEndsAtEpochMs: cmd.scheduleEndsAtUtc?.millisecondsSinceEpoch,
-        );
+        // Prevent duplicate templates/audio by keeping native overlay disabled while app is alive.
+        await _device.hideOverlay();
       }
 
       _announcementOverlay.show(

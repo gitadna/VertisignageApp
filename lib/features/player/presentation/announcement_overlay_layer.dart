@@ -36,6 +36,8 @@ class AnnouncementOverlayLayer extends StatelessWidget {
                   ),
                   kind: n.mediaKind,
                   url: n.mediaUrl,
+                  title: n.title,
+                  body: n.body,
                 ),
               );
             },
@@ -51,10 +53,14 @@ class _AnnouncementMediaFill extends StatefulWidget {
     super.key,
     required this.kind,
     required this.url,
+    required this.title,
+    required this.body,
   });
 
   final AnnouncementMediaKind kind;
   final String? url;
+  final String title;
+  final String? body;
 
   @override
   State<_AnnouncementMediaFill> createState() => _AnnouncementMediaFillState();
@@ -245,16 +251,40 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
       if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
         return const ColoredBox(color: Colors.black);
       }
-      return WebSlideLayer(
-        uri: uri,
-        onLoadSuccess: () {},
-        onLoadFailed: () {
-          if (!mounted) return;
-          setState(() => _webFailed = true);
-        },
+      return ColoredBox(
+        color: Colors.black,
+        child: WebSlideLayer(
+          uri: uri,
+          onLoadSuccess: () {},
+          onLoadFailed: () {
+            if (!mounted) return;
+            setState(() => _webFailed = true);
+          },
+        ),
       );
     }
 
-    return const ColoredBox(color: Colors.black);
+    final message = [
+      widget.title.trim(),
+      widget.body?.trim() ?? '',
+    ].where((e) => e.isNotEmpty).join('\n\n');
+    return ColoredBox(
+      color: Colors.black,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+          child: Text(
+            message.isNotEmpty ? message : 'Announcement',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 34,
+              fontWeight: FontWeight.w600,
+              height: 1.25,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

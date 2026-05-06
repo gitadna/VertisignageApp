@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:async';
 
 import '../../../core/errors/app_exception.dart';
 import '../../../models/auth_session.dart';
@@ -22,6 +23,7 @@ class PairingController extends ChangeNotifier {
   final PairingApi _pairingApi;
   final TokenStore _tokenStore;
   final DeviceFingerprintService _fingerprintService;
+  static const Duration _pairingTimeout = Duration(seconds: 20);
 
   PairingPhase phase = PairingPhase.idle;
   String? errorMessage;
@@ -31,17 +33,20 @@ class PairingController extends ChangeNotifier {
     required String rawLicenseId,
     required String rawDeviceName,
   }) async {
+    if (phase == PairingPhase.loading) return;
     phase = PairingPhase.loading;
     errorMessage = null;
     notifyListeners();
 
     try {
       final fingerprint = await _fingerprintService.getFingerprint();
-      final result = await _pairingApi.pairDevice(
-        licenseId: rawLicenseId,
-        deviceName: rawDeviceName,
-        fingerprint: fingerprint,
-      );
+      final result = await _pairingApi
+          .pairDevice(
+            licenseId: rawLicenseId,
+            deviceName: rawDeviceName,
+            fingerprint: fingerprint,
+          )
+          .timeout(_pairingTimeout);
       await _tokenStore.saveSession(
         AuthSession(accessToken: result.accessToken),
       );
@@ -56,6 +61,11 @@ class PairingController extends ChangeNotifier {
     } on AppException catch (e) {
       phase = PairingPhase.error;
       errorMessage = e.message;
+      notifyListeners();
+    } on TimeoutException {
+      phase = PairingPhase.error;
+      errorMessage =
+          'Pairing timed out. Check API base URL/network and try again.';
       notifyListeners();
     } catch (e, st) {
       if (kDebugMode) {
@@ -83,10 +93,12 @@ class PairingController extends ChangeNotifier {
     try {
       final fingerprint = await _fingerprintService.getFingerprint();
       final defaultName = _tokenStore.savedDeviceName ?? 'Android Screen';
-      final result = await _pairingApi.recoverDevice(
-        deviceName: defaultName,
-        fingerprint: fingerprint,
-      );
+      final result = await _pairingApi
+          .recoverDevice(
+            deviceName: defaultName,
+            fingerprint: fingerprint,
+          )
+          .timeout(_pairingTimeout);
       await _tokenStore.saveSession(AuthSession(accessToken: result.accessToken));
       await _tokenStore.savePairedDevice(result.identity);
       final savedLicense = result.identity.licenseId;
@@ -102,6 +114,11 @@ class PairingController extends ChangeNotifier {
     } on AppException catch (e) {
       phase = PairingPhase.idle;
       errorMessage = e.message;
+      notifyListeners();
+    } on TimeoutException {
+      phase = PairingPhase.idle;
+      errorMessage =
+          'Auto-recovery timed out. Verify API URL/network, then register manually.';
       notifyListeners();
     } catch (_) {
       phase = PairingPhase.idle;

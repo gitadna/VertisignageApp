@@ -196,6 +196,87 @@ class AnnouncementClearCommand extends RealtimeCommand {
   final String? announcementId;
 }
 
+String? _coerceNonEmptyString(dynamic raw) {
+  if (raw is! String) return null;
+  final trimmed = raw.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
+
+String? _firstNonEmptyString(Iterable<dynamic> values) {
+  for (final value in values) {
+    final normalized = _coerceNonEmptyString(value);
+    if (normalized != null) return normalized;
+  }
+  return null;
+}
+
+String _inferMediaKindFromUrl(String url) {
+  final lower = url.toLowerCase();
+  if (RegExp(r'\.(mp4|webm|m3u8|mov)(\?|$)').hasMatch(lower)) {
+    return 'video';
+  }
+  if (RegExp(r'\.(png|jpe?g|gif|bmp|webp|svg)(\?|$)').hasMatch(lower)) {
+    return 'image';
+  }
+  return 'url';
+}
+
+({String? mediaUrl, String? mediaKind}) _resolveIncomingMedia(
+  Map<String, dynamic> payload,
+) {
+  final hintedKind = _coerceNonEmptyString(payload['mediaKind'])?.toLowerCase();
+  final videoUrl = _coerceNonEmptyString(payload['videoUrl']);
+  final imageUrl = _coerceNonEmptyString(payload['imageUrl']);
+  final canonicalMediaUrl = _coerceNonEmptyString(payload['mediaUrl']);
+  final directUrl = _coerceNonEmptyString(
+    payload['url'] ??
+        payload['pageUrl'] ??
+        payload['targetUrl'] ??
+        payload['linkUrl'] ??
+        payload['contentUrl'],
+  );
+
+  if (hintedKind == 'video') {
+    final mediaUrl = _firstNonEmptyString([
+      videoUrl,
+      canonicalMediaUrl,
+      imageUrl,
+      directUrl,
+    ]);
+    return (mediaUrl: mediaUrl, mediaKind: mediaUrl == null ? null : 'video');
+  }
+  if (hintedKind == 'image') {
+    final mediaUrl = _firstNonEmptyString([
+      imageUrl,
+      canonicalMediaUrl,
+      videoUrl,
+      directUrl,
+    ]);
+    return (mediaUrl: mediaUrl, mediaKind: mediaUrl == null ? null : 'image');
+  }
+  if (hintedKind == 'url') {
+    final mediaUrl = _firstNonEmptyString([
+      directUrl,
+      canonicalMediaUrl,
+      videoUrl,
+      imageUrl,
+    ]);
+    return (mediaUrl: mediaUrl, mediaKind: mediaUrl == null ? null : 'url');
+  }
+
+  // No trusted hint: enforce priority video > image > url > content.
+  if (videoUrl != null) return (mediaUrl: videoUrl, mediaKind: 'video');
+  if (imageUrl != null) return (mediaUrl: imageUrl, mediaKind: 'image');
+  if (directUrl != null) return (mediaUrl: directUrl, mediaKind: 'url');
+  if (canonicalMediaUrl != null) {
+    return (
+      mediaUrl: canonicalMediaUrl,
+      mediaKind: _inferMediaKindFromUrl(canonicalMediaUrl),
+    );
+  }
+  return (mediaUrl: null, mediaKind: null);
+}
+
 /// JSON → typed command; unknown types return null (ignored).
 RealtimeCommand? parseRealtimeCommand(String raw) {
   try {
@@ -309,12 +390,9 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final mid = payload['messageId'] as String?;
         final text = (payload['text'] as String?)?.trim() ?? '';
         if (mid == null) return null;
-        final rawMedia = payload['mediaUrl'] ?? payload['imageUrl'];
-        final mediaUrl = rawMedia is String && rawMedia.trim().isNotEmpty
-            ? rawMedia.trim()
-            : null;
-        final mediaKindRaw = payload['mediaKind'] as String?;
-        final mediaKind = mediaKindRaw?.trim().toLowerCase();
+        final resolvedMedia = _resolveIncomingMedia(payload);
+        final mediaUrl = resolvedMedia.mediaUrl;
+        final mediaKind = resolvedMedia.mediaKind;
         final untilDismissed = payload['untilDismissed'] == null
             ? true
             : payload['untilDismissed'] == true;
@@ -348,12 +426,9 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final bodyRaw = (payload['body'] as String?)?.trim();
         final ds = payload['durationSec'];
         final durationSec = ds is num ? ds.round() : 15;
-        final rawMedia = payload['mediaUrl'] ?? payload['imageUrl'];
-        final mediaUrl = rawMedia is String && rawMedia.trim().isNotEmpty
-            ? rawMedia.trim()
-            : null;
-        final mediaKindRaw = payload['mediaKind'] as String?;
-        final mediaKind = mediaKindRaw?.trim().toLowerCase();
+        final resolvedMedia = _resolveIncomingMedia(payload);
+        final mediaUrl = resolvedMedia.mediaUrl;
+        final mediaKind = resolvedMedia.mediaKind;
         final mode = payload['mode'] as String?;
         final untilDismissed = payload['untilDismissed'] == true;
         final createdAtRaw = payload['createdAt'] as String?;
