@@ -35,6 +35,7 @@ object VertiPushCommandHandler {
                 // Allow Flutter to dismiss in-app layers too (native overlay already hidden).
                 false
             }
+            "ANNOUNCEMENT_TRANSPORT" -> false
             else -> false
         }
     }

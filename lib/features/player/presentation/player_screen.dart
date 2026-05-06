@@ -19,6 +19,7 @@ import 'emergency_overlay_layer.dart';
 import 'playback_layers.dart';
 import 'player_controller.dart';
 import 'player_kiosk_overlay.dart';
+import '../../voice_broadcast/presentation/voice_takeover_overlay.dart';
 
 const Duration _kPlaylistSwitchDuration = Duration(milliseconds: 450);
 
@@ -386,6 +387,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           const AnnouncementOverlayLayer(),
           const AnnouncementTickerLayer(),
           const EmergencyOverlayLayer(),
+          const VoiceTakeoverOverlay(),
         ],
       ),
     );

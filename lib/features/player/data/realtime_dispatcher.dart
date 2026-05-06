@@ -62,6 +62,8 @@ class RealtimeDispatcher {
   final OtaUpdateService _ota;
   final PlayerTelemetry _telemetry;
   DateTime? _activeOverlayCreatedAt;
+  /// Latest ordering key for the active full-screen announcement (pushedAt ?? createdAt).
+  DateTime? _activeAnnouncementOrderUtc;
 
   final LinkedHashSet<String> _recentMessageIds = LinkedHashSet<String>();
 
@@ -99,6 +101,14 @@ class RealtimeDispatcher {
     final active = _activeOverlayCreatedAt;
     if (active == null) return true;
     return !createdAt.isBefore(active);
+  }
+
+  bool _shouldApplyAnnouncement(AnnouncementCommand cmd) {
+    final incoming =
+        cmd.pushedAtUtc ?? cmd.createdAt ?? DateTime.now().toUtc();
+    final active = _activeAnnouncementOrderUtc;
+    if (active == null) return true;
+    return !incoming.isBefore(active);
   }
 
   Future<bool> _waitForForeground({
@@ -295,8 +305,14 @@ class RealtimeDispatcher {
       return;
     }
     if (cmd is AnnouncementCommand) {
-      if (!await _device.pushDedupeTryConsume(cmd.announcementId)) return;
-      if (!_canApplyIncoming(cmd.createdAt)) return;
+      final dedupeKey = cmd.pushedAtUtc != null
+          ? '${cmd.announcementId}|${cmd.pushedAtUtc!.millisecondsSinceEpoch}'
+          : cmd.announcementId;
+      if (!await _device.pushDedupeTryConsume(dedupeKey)) return;
+      if (!_shouldApplyAnnouncement(cmd)) return;
+      final orderUtc =
+          cmd.pushedAtUtc ?? cmd.createdAt ?? DateTime.now().toUtc();
+      _activeAnnouncementOrderUtc = orderUtc;
       _activeOverlayCreatedAt = cmd.createdAt ?? DateTime.now().toUtc();
       _player.beginAnnouncementHold();
       final url = _resolveMediaUrl(cmd.mediaUrl);
@@ -341,8 +357,17 @@ class RealtimeDispatcher {
       );
       return;
     }
+    if (cmd is AnnouncementTransportCommand) {
+      _announcementOverlay.applyTransportCommand(
+        announcementId: cmd.announcementId,
+        action: cmd.action,
+        volume: cmd.volume,
+      );
+      return;
+    }
     if (cmd is AnnouncementClearCommand) {
       _activeOverlayCreatedAt = null;
+      _activeAnnouncementOrderUtc = null;
       _announcementOverlay.dismissManual();
       await _device.hideOverlay();
       return;
@@ -452,6 +477,13 @@ class RealtimeDispatcher {
             announcementId: (aid != null && aid.isNotEmpty) ? aid : null,
           ),
         );
+        return;
+      }
+      if (vsCmd == 'ANNOUNCEMENT_TRANSPORT') {
+        final payload = data['vs_payload']?.toString();
+        if (payload != null && payload.isNotEmpty) {
+          await dispatchRealtimePayload(payload);
+        }
       }
     } catch (e, st) {
       if (kDebugMode) {

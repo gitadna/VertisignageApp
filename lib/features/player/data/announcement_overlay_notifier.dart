@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:video_player/video_player.dart';
 
 /// Kiosk treats announcements as full-screen media only (image or video URL).
 enum AnnouncementMediaKind {
@@ -34,6 +35,7 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
   int _wallClockDurationSec = 15;
   DateTime? _shownAtUtc;
   DateTime? _presentationEndsAtUtc;
+  VideoPlayerController? _videoController;
 
   String? get announcementId => _id;
   AnnouncementMediaKind get mediaKind => _mediaKind;
@@ -86,6 +88,34 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
     _maybeExpiredImmediately();
   }
 
+  /// Bound when overlay plays announcement video (see [_AnnouncementMediaFill]).
+  void bindVideoController(VideoPlayerController? controller) {
+    _videoController = controller;
+  }
+
+  void applyTransportCommand({
+    required String announcementId,
+    required String action,
+    double? volume,
+  }) {
+    if (_id == null || _id != announcementId) return;
+    final v = _videoController;
+    if (v == null || !v.value.isInitialized) return;
+    if (volume != null) {
+      unawaited(v.setVolume(volume.clamp(0.0, 1.0)));
+    }
+    final a = action.toLowerCase();
+    if (a == 'pause') {
+      unawaited(v.pause());
+    } else if (a == 'play') {
+      unawaited(v.play());
+    } else if (a == 'restart') {
+      unawaited(v.pause());
+      unawaited(v.seekTo(Duration.zero));
+      unawaited(v.play());
+    }
+  }
+
   void dismissManual() => _finishFromTimer();
 
   DateTime? _resolveDeadlineUtc() {
@@ -133,6 +163,7 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
     _wallClockDurationSec = 15;
     _shownAtUtc = null;
     _presentationEndsAtUtc = null;
+    _videoController = null;
 
     final cb = _onDismiss;
     _onDismiss = null;

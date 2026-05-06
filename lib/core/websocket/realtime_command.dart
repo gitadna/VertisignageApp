@@ -157,6 +157,7 @@ class AnnouncementCommand extends RealtimeCommand {
     this.contentType,
     this.createdAt,
     this.scheduleEndsAtUtc,
+    this.pushedAtUtc,
   });
 
   final String announcementId;
@@ -174,6 +175,20 @@ class AnnouncementCommand extends RealtimeCommand {
   final DateTime? createdAt;
   /// When set, kiosk loops announcement media until this instant (UTC).
   final DateTime? scheduleEndsAtUtc;
+  /// Last push time from server — used for overlap resolution (latest wins).
+  final DateTime? pushedAtUtc;
+}
+
+class AnnouncementTransportCommand extends RealtimeCommand {
+  const AnnouncementTransportCommand({
+    required this.announcementId,
+    required this.action,
+    this.volume,
+  });
+
+  final String announcementId;
+  final String action;
+  final double? volume;
 }
 
 class AnnouncementClearCommand extends RealtimeCommand {
@@ -343,6 +358,7 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final untilDismissed = payload['untilDismissed'] == true;
         final createdAtRaw = payload['createdAt'] as String?;
         final scheduleEndsRaw = payload['scheduleEndsAt'] as String?;
+        final pushedAtRaw = payload['pushedAt'] as String?;
         return AnnouncementCommand(
           announcementId: aid,
           title: (title == null || title.isEmpty) ? 'Announcement' : title,
@@ -357,6 +373,19 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
           createdAt: createdAtRaw != null ? DateTime.tryParse(createdAtRaw)?.toUtc() : null,
           scheduleEndsAtUtc:
               scheduleEndsRaw != null ? DateTime.tryParse(scheduleEndsRaw)?.toUtc() : null,
+          pushedAtUtc: pushedAtRaw != null ? DateTime.tryParse(pushedAtRaw)?.toUtc() : null,
+        );
+      case 'ANNOUNCEMENT_TRANSPORT':
+        if (payload is! Map<String, dynamic>) return null;
+        final aid = payload['announcementId'] as String?;
+        final action = (payload['action'] as String?)?.trim().toLowerCase();
+        if (aid == null || aid.isEmpty || action == null || action.isEmpty) return null;
+        final volRaw = payload['volume'];
+        final volume = volRaw is num ? volRaw.toDouble() : null;
+        return AnnouncementTransportCommand(
+          announcementId: aid,
+          action: action,
+          volume: volume,
         );
       case 'ANNOUNCEMENT_CLEAR':
         if (payload is! Map<String, dynamic>) return const AnnouncementClearCommand();

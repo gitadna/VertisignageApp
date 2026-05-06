@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import '../../../services/token_store.dart';
+import '../../voice_broadcast/data/voice_broadcast_models.dart';
 
 /// Device-authenticated fleet endpoints (logs + command acks). Never throws to callers of enqueue paths.
 class KioskFleetApi {
@@ -99,5 +100,45 @@ class KioskFleetApi {
         },
       );
     } catch (_) {}
+  }
+
+  Future<String?> getActiveVoiceStreamSessionId() async {
+    final device = _tokenStore.loadPairedDevice();
+    final token = _tokenStore.accessToken;
+    if (device == null || token == null || token.isEmpty) return null;
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/api/streams/active-for-device/${device.deviceId}',
+      );
+      final code = res.statusCode ?? 0;
+      if (code < 200 || code >= 300) return null;
+      final data = res.data?['data'];
+      if (data is! Map) return null;
+      final id = data['streamSessionId'];
+      if (id is String && id.isNotEmpty) return id;
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<JoinGrant?> requestVoiceJoinGrant(String streamSessionId) async {
+    final device = _tokenStore.loadPairedDevice();
+    final token = _tokenStore.accessToken;
+    if (device == null || token == null || token.isEmpty || streamSessionId.isEmpty) {
+      return null;
+    }
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/api/streams/$streamSessionId/join-device',
+      );
+      final code = res.statusCode ?? 0;
+      if (code < 200 || code >= 300) return null;
+      final data = res.data?['data'];
+      if (data is! Map<String, dynamic>) return null;
+      return JoinGrant.fromMap(data);
+    } catch (_) {
+      return null;
+    }
   }
 }

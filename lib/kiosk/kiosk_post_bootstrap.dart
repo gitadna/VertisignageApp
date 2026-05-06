@@ -10,6 +10,7 @@ import '../core/errors/global_error_handler.dart';
 import '../core/logging/kiosk_log.dart';
 import '../core/recovery/kiosk_recovery_store.dart';
 import '../features/player/data/remote_log_uploader.dart';
+import '../features/voice_broadcast/data/voice_broadcast_coordinator.dart';
 import '../services/device_service.dart';
 import '../services/token_store.dart';
 import 'connectivity_coordinator.dart';
@@ -19,6 +20,7 @@ import 'push_registration_coordinator.dart';
 /// Post-DI kiosk wiring: global errors, immersive chrome, connectivity, foreground, lock task.
 abstract final class KioskPostBootstrap {
   static bool _notificationDeniedLogged = false;
+  static bool _configured = false;
 
   static Future<void> _maybeLogNotificationDeniedOnce() async {
     if (_notificationDeniedLogged) return;
@@ -38,12 +40,19 @@ abstract final class KioskPostBootstrap {
   }
 
   static Future<void> configure(GetIt sl) async {
+    if (_configured) {
+      KioskLog.d('Kiosk', 'post-bootstrap already configured; skipping duplicate wiring');
+      return;
+    }
+    _configured = true;
     sl<KioskRecoveryStore>().restoreGateFromDisk();
     await sl<RemoteLogUploader>().restoreFromDisk();
     KioskLog.bindRemoteSink(sl<RemoteLogUploader>().enqueue);
     GlobalErrorHandler.install();
 
     sl<FleetRealtimeCoordinator>().start();
+    sl<VoiceBroadcastCoordinator>().start();
+    KioskLog.event('voice_signal', 'voice_coordinator_started');
     sl<PushRegistrationCoordinator>().start();
 
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);

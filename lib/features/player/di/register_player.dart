@@ -24,6 +24,9 @@ import '../data/playlist_storage.dart';
 import '../data/playlist_sync_service.dart';
 import '../data/realtime_dispatcher.dart';
 import '../presentation/player_controller.dart';
+import '../../voice_broadcast/data/voice_broadcast_coordinator.dart';
+import '../../voice_broadcast/data/voice_broadcast_player.dart';
+import '../../voice_broadcast/data/voice_broadcast_signaling.dart';
 
 /// Player feature wiring (does not alter core DI).
 void registerPlayerModule(GetIt getIt) {
@@ -104,6 +107,27 @@ void registerPlayerModule(GetIt getIt) {
       tokenStore: getIt<TokenStore>(),
       dispatcher: getIt<RealtimeDispatcher>(),
       realtime: getIt<RealtimeClient>(),
+    ),
+  );
+
+  getIt.registerLazySingleton<VoiceBroadcastPlayer>(
+    () => VoiceBroadcastPlayer(
+      playerController: getIt<PlayerController>(),
+    ),
+  );
+  getIt.registerLazySingleton<VoiceBroadcastSignaling>(
+    () => VoiceBroadcastSignaling(
+      tokenStore: getIt<TokenStore>(),
+      env: getIt<EnvironmentConfig>(),
+    ),
+  );
+  getIt.registerLazySingleton<VoiceBroadcastCoordinator>(
+    () => VoiceBroadcastCoordinator(
+      tokenStore: getIt<TokenStore>(),
+      signaling: getIt<VoiceBroadcastSignaling>(),
+      player: getIt<VoiceBroadcastPlayer>(),
+      fleetApi: getIt<KioskFleetApi>(),
+      deviceService: getIt<DeviceService>(),
     ),
   );
 

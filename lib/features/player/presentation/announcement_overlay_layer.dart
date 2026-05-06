@@ -99,6 +99,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
       await c.setLooping(true);
       await c.setVolume(1);
       _video = c;
+      sl<AnnouncementOverlayNotifier>().bindVideoController(c);
       c.addListener(_onVideoTick);
       setState(() {});
       await c.play();
@@ -119,6 +120,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     _webFailed = false;
     final c = _video;
     if (c != null) {
+      sl<AnnouncementOverlayNotifier>().bindVideoController(null);
       c.removeListener(_onVideoTick);
       unawaited(c.dispose());
       _video = null;
@@ -153,6 +155,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
   void dispose() {
     final c = _video;
     if (c != null) {
+      sl<AnnouncementOverlayNotifier>().bindVideoController(null);
       c.removeListener(_onVideoTick);
       unawaited(c.dispose());
     }
