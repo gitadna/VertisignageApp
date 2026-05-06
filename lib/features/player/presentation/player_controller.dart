@@ -53,6 +53,13 @@ class PlayerController {
   bool _handledRasterFailure = false;
   int _lastEpoch = -1;
   int _generationCounter = 0;
+  int _videoErrorBurstCount = 0;
+  String? _videoErrorBurstKey;
+  DateTime? _videoErrorBurstStartedAt;
+
+  static const int _videoErrorBurstThreshold = 3;
+  static const Duration _videoErrorBurstWindow = Duration(seconds: 8);
+  static const Duration _videoErrorCooldown = Duration(seconds: 3);
 
   /// When true, auto-advance timers are off and video should be paused.
   final ValueNotifier<bool> userPaused = ValueNotifier<bool>(false);
@@ -64,6 +71,11 @@ class PlayerController {
   final ValueNotifier<bool> playbackSuspended = ValueNotifier<bool>(false);
 
   List<PlaylistItem> get playlist => _playlist;
+
+  void _debug(String message) {
+    if (!kDebugMode) return;
+    debugPrint('PlayerController: $message');
+  }
 
   void _syncPlaybackSuspended() {
     playbackSuspended.value = userPaused.value || announcementHold.value;
@@ -141,7 +153,12 @@ class PlayerController {
     }
 
     _armProgressWatchdog(gen);
-    final ms = item.durationMs <= 0 ? 1000 : item.durationMs;
+    if (item.mediaKind == PlaylistMediaKind.video) {
+      // Videos advance via VideoSlideLayer -> onVideoEnded; don't schedule dwell.
+      return;
+    }
+
+    final ms = item.durationMs <= 0 ? 10000 : item.durationMs;
     _slideTimer = Timer(Duration(milliseconds: ms), () {
       unawaited(_onDwellElapsed(gen));
     });
@@ -221,6 +238,7 @@ class PlayerController {
 
     if (_playlist.isEmpty) return;
     _index = (_index + 1) % _playlist.length;
+    _debug('advance -> next index=$_index len=${_playlist.length}');
     await _presentCurrent();
   }
 
@@ -232,6 +250,9 @@ class PlayerController {
 
     final item = _playlist[_index];
     final gen = ++_generationCounter;
+    _debug(
+      'present gen=$gen idx=$_index kind=${item.mediaKind.wireValue} id=${item.id} order=${item.order}',
+    );
 
     if (item.mediaKind == PlaylistMediaKind.url) {
       final uri = Uri.tryParse(item.url.trim());
@@ -267,6 +288,7 @@ class PlayerController {
     final path = await _cache.resolveLocalPath(item.url);
     if (!_running) return;
     if (path == null) {
+      _debug('present gen=$gen skipped: local path resolve failed');
       await _goToNextSlide();
       return;
     }
@@ -281,11 +303,12 @@ class PlayerController {
 
     if (!playbackSuspended.value) {
       _armProgressWatchdog(gen);
-
-      final ms = item.durationMs <= 0 ? 1000 : item.durationMs;
-      _slideTimer = Timer(Duration(milliseconds: ms), () {
-        unawaited(_onDwellElapsed(gen));
-      });
+      if (item.mediaKind != PlaylistMediaKind.video) {
+        final ms = item.durationMs <= 0 ? 10000 : item.durationMs;
+        _slideTimer = Timer(Duration(milliseconds: ms), () {
+          unawaited(_onDwellElapsed(gen));
+        });
+      }
     }
   }
 
@@ -326,6 +349,7 @@ class PlayerController {
   /// WebView error / load watchdog — skip item.
   Future<void> onWebLoadFailed() async {
     if (!_running) return;
+    _debug('web load failed; skipping');
     await _goToNextSlide();
   }
 
@@ -333,9 +357,49 @@ class PlayerController {
   Future<void> onVideoEnded(int generation, {bool hadError = false}) async {
     if (!_running) return;
     if (display.value?.generation != generation) return;
-    if (hadError && kDebugMode) {
-      debugPrint('PlayerController: video ${hadError ? 'error' : 'ended'}');
+    final state = display.value;
+    final item = state?.item;
+    final itemKey = '${item?.id ?? 'unknown'}|${item?.url ?? ''}';
+
+    if (!hadError) {
+      _videoErrorBurstCount = 0;
+      _videoErrorBurstKey = null;
+      _videoErrorBurstStartedAt = null;
+      _debug('video ended gen=$generation -> next');
+      await _goToNextSlide();
+      return;
     }
+
+    final now = DateTime.now();
+    final sameKey = _videoErrorBurstKey == itemKey;
+    final inWindow = _videoErrorBurstStartedAt != null &&
+        now.difference(_videoErrorBurstStartedAt!) <= _videoErrorBurstWindow;
+    if (sameKey && inWindow) {
+      _videoErrorBurstCount++;
+    } else {
+      _videoErrorBurstCount = 1;
+      _videoErrorBurstStartedAt = now;
+      _videoErrorBurstKey = itemKey;
+    }
+
+    _debug(
+      'video error gen=$generation key=$itemKey burst=$_videoErrorBurstCount window=${_videoErrorBurstWindow.inSeconds}s',
+    );
+
+    if (_videoErrorBurstCount >= _videoErrorBurstThreshold) {
+      _debug(
+        'video error burst threshold reached; cooling down for ${_videoErrorCooldown.inSeconds}s before retry',
+      );
+      _cancelTimers();
+      _slideTimer = Timer(_videoErrorCooldown, () {
+        if (!_running) return;
+        if (display.value?.generation != generation) return;
+        _debug('video cooldown elapsed; retry current item');
+        unawaited(_presentCurrent());
+      });
+      return;
+    }
+
     await _goToNextSlide();
   }
 

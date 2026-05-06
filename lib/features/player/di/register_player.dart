@@ -30,6 +30,7 @@ void registerPlayerModule(GetIt getIt) {
   getIt.registerLazySingleton<MediaCacheService>(
     () => MediaCacheService(
       persistentStorage: getIt<LocalStorage>(),
+      apiBaseUrl: getIt<EnvironmentConfig>().apiBaseUrl,
       maxCacheMb: getIt<EnvironmentConfig>().maxMediaCacheMb,
     ),
   );

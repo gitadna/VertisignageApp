@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../core/di/injection.dart';
 import '../data/announcement_overlay_notifier.dart';
+import 'playback_layers.dart';
 
 /// Full-screen announcement media only (no titles or footer chrome).
 class AnnouncementOverlayLayer extends StatelessWidget {
@@ -62,7 +62,6 @@ class _AnnouncementMediaFill extends StatefulWidget {
 
 class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
   VideoPlayerController? _video;
-  WebViewController? _web;
   bool _videoFailed = false;
   bool _webFailed = false;
 
@@ -77,7 +76,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     if (widget.kind == AnnouncementMediaKind.url &&
         widget.url != null &&
         widget.url!.isNotEmpty) {
-      _initWeb();
+      // WebView widget is built directly; no async init required here.
     }
   }
 
@@ -132,40 +131,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     if (widget.kind == AnnouncementMediaKind.url &&
         widget.url != null &&
         widget.url!.isNotEmpty) {
-      _initWeb();
-    }
-  }
-
-  void _initWeb() {
-    final raw = widget.url;
-    if (raw == null || raw.isEmpty) {
-      _web = null;
-      _webFailed = true;
-      if (mounted) setState(() {});
-      return;
-    }
-    final uri = Uri.tryParse(_effectiveUrl(raw));
-    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
-      _web = null;
-      _webFailed = true;
-      if (mounted) setState(() {});
-      return;
-    }
-    final controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF000000))
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onWebResourceError: (_) {
-            if (!mounted) return;
-            setState(() => _webFailed = true);
-          },
-        ),
-      );
-    _web = controller;
-    unawaited(controller.loadRequest(uri));
-    if (mounted) {
-      setState(() {});
+      // WebView widget is built directly; no async init required.
     }
   }
 
@@ -272,13 +238,17 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         url != null &&
         url.isNotEmpty &&
         !_webFailed) {
-      final c = _web;
-      if (c == null) {
+      final uri = Uri.tryParse(_effectiveUrl(url));
+      if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
         return const ColoredBox(color: Colors.black);
       }
-      return ColoredBox(
-        color: Colors.black,
-        child: WebViewWidget(controller: c),
+      return WebSlideLayer(
+        uri: uri,
+        onLoadSuccess: () {},
+        onLoadFailed: () {
+          if (!mounted) return;
+          setState(() => _webFailed = true);
+        },
       );
     }
 

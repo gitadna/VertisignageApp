@@ -83,6 +83,20 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
   VideoPlayerController? _controller;
   bool _notified = false;
   VoidCallback? _pausedListener;
+  bool _handlingError = false;
+  bool _firstFrameSeen = false;
+  int _restartAttempts = 0;
+  DateTime? _playStartedAt;
+
+  static const int _maxDecoderRestarts = 1;
+  static const Duration _earlyFailureWindow = Duration(milliseconds: 1800);
+  static const Duration _minPlaybackBeforeEnd = Duration(milliseconds: 700);
+  static const Duration _endEpsilon = Duration(milliseconds: 140);
+
+  void _log(String message) {
+    if (!kDebugMode) return;
+    debugPrint('VideoSlideLayer[g=${widget.generation}]: $message');
+  }
 
   @override
   void initState() {
@@ -153,6 +167,7 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
   }
 
   Future<void> _init() async {
+    _log('init start path=${widget.path}');
     final c = VideoPlayerController.file(File(widget.path));
     try {
       await c.initialize();
@@ -160,18 +175,27 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
         await c.dispose();
         return;
       }
-      await c.setLooping(false);
+      // Playlist video timing is controlled by PlayerController dwell timers.
+      // Keep decoder looping so bogus metadata durations (e.g. 1ms) do not
+      // trigger immediate slide churn on some Android codecs.
+      await c.setLooping(true);
       await c.setVolume(widget.muted ? 0 : 1);
       _controller = c;
       c.addListener(_onTick);
       setState(() {});
       await c.play();
+      _playStartedAt = DateTime.now();
+      _firstFrameSeen = false;
+      _handlingError = false;
+      _log(
+        'init ok durationMs=${c.value.duration.inMilliseconds} size=${c.value.size.width}x${c.value.size.height}',
+      );
       _applyPausedFromNotifier();
-    } catch (_) {
+    } catch (e) {
       await c.dispose();
       if (!mounted || _notified) return;
-      _notified = true;
-      unawaited(widget.onEnded(widget.generation, hadError: true));
+      _log('init failed error=$e');
+      await _retryOrFinishOnError();
     }
   }
 
@@ -180,13 +204,50 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
     if (c == null || _notified || !mounted) return;
     final v = c.value;
     if (v.hasError) {
-      _finish(hadError: true);
+      _log('tick hasError desc=${v.errorDescription}');
+      unawaited(_retryOrFinishOnError());
       return;
     }
     if (!v.isInitialized || v.duration == Duration.zero) return;
-    if (v.position >= v.duration - const Duration(milliseconds: 120)) {
-      _finish(hadError: false);
+
+    if (!_firstFrameSeen && v.position > const Duration(milliseconds: 50)) {
+      _firstFrameSeen = true;
+      _log('first frame at ${v.position.inMilliseconds}ms');
     }
+
+    // Do not auto-finish on "natural end" here. Playlist dwell timers decide
+    // when to switch slides, and looping avoids codec metadata edge-cases.
+  }
+
+  Future<void> _retryOrFinishOnError() async {
+    if (!mounted || _notified || _handlingError) return;
+    _handlingError = true;
+    final startedAt = _playStartedAt;
+    final earlyFailure = startedAt != null &&
+        DateTime.now().difference(startedAt) < _earlyFailureWindow;
+    if (earlyFailure && _restartAttempts < _maxDecoderRestarts) {
+      _restartAttempts++;
+      _log(
+        'early failure; restart attempt $_restartAttempts/$_maxDecoderRestarts',
+      );
+      final old = _controller;
+      if (old != null) {
+        old.removeListener(_onTick);
+        await old.dispose();
+      }
+      _controller = null;
+      if (mounted) {
+        setState(() {});
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      if (!mounted || _notified) return;
+      _handlingError = false;
+      await _init();
+      return;
+    }
+    _log('error not recoverable; finishing with hadError=true');
+    _handlingError = false;
+    _finish(hadError: true);
   }
 
   void _finish({required bool hadError}) {
@@ -197,6 +258,7 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
       c.removeListener(_onTick);
       unawaited(c.pause());
     }
+    _log('finish callback hadError=$hadError');
     unawaited(widget.onEnded(widget.generation, hadError: hadError));
   }
 

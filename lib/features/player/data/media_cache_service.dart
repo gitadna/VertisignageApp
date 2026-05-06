@@ -18,10 +18,12 @@ class MediaCacheService {
   MediaCacheService({
     Dio? downloadClient,
     LocalStorage? persistentStorage,
+    String? apiBaseUrl,
     this.maxCacheMb = 400,
   }) : _dio = downloadClient ??
             Dio(
               BaseOptions(
+                baseUrl: (apiBaseUrl ?? '').trim(),
                 connectTimeout: const Duration(seconds: 45),
                 receiveTimeout: const Duration(minutes: 15),
                 responseType: ResponseType.bytes,
@@ -226,11 +228,19 @@ class MediaCacheService {
 
   Future<String?> _downloadToFile(String url) async {
     try {
-      final uri = Uri.tryParse(url);
-      if (uri == null || !uri.hasScheme) return null;
+      final resolvedUrl = _resolveReachableUrl(url);
+      final uri = Uri.tryParse(resolvedUrl);
+      if (uri == null) return null;
+
+      // Accept both absolute URLs and server-returned relative paths like `/uploads/x.mp4`.
+      // Relative URLs are resolved by Dio using [BaseOptions.baseUrl].
+      final base = _dio.options.baseUrl.trim();
+      final isAbsolute = uri.hasScheme;
+      final canResolveRelative = !isAbsolute && base.isNotEmpty;
+      if (!isAbsolute && !canResolveRelative) return null;
 
       final response = await _dio.get<List<int>>(
-        url,
+        resolvedUrl,
         options: Options(responseType: ResponseType.bytes),
       );
 
@@ -256,6 +266,34 @@ class MediaCacheService {
       }
       return null;
     }
+  }
+
+  String _resolveReachableUrl(String rawUrl) {
+    final trimmed = rawUrl.trim();
+    if (trimmed.isEmpty) return trimmed;
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return trimmed;
+
+    final baseRaw = _dio.options.baseUrl.trim();
+    if (baseRaw.isEmpty) return trimmed;
+    final base = Uri.tryParse(baseRaw);
+    if (base == null || !base.hasAuthority) return trimmed;
+
+    if (!uri.hasScheme) {
+      return trimmed;
+    }
+
+    final host = uri.host.toLowerCase();
+    final isLoopbackHost =
+        host == 'localhost' || host == '127.0.0.1' || host == '::1';
+    if (!isLoopbackHost) return trimmed;
+
+    final rewritten = uri.replace(
+      scheme: base.scheme,
+      host: base.host,
+      port: base.hasPort ? base.port : null,
+    );
+    return rewritten.toString();
   }
 
   String _fileNameForUrl(String url) {
