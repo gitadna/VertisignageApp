@@ -125,6 +125,46 @@ class RealtimeDispatcher {
     return WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
   }
 
+  int? _scheduleEndsEpochMs(DateTime? utc) {
+    if (utc == null) return null;
+    return utc.toUtc().millisecondsSinceEpoch;
+  }
+
+  Future<Map<String, dynamic>> _ensureForegroundOrUseNativeOverlay({
+    required String text,
+    required String? mediaUrl,
+    required String? mediaKind,
+    required bool untilDismissed,
+    required int durationSec,
+    required int? scheduleEndsAtEpochMs,
+  }) async {
+    final launchDispatched = await _device.wakeAppToForeground();
+    final resumed = launchDispatched && await _waitForForeground();
+    final lifecycle = WidgetsBinding.instance.lifecycleState?.name ?? 'unknown';
+    if (resumed) {
+      await _device.hideOverlay();
+      return <String, dynamic>{
+        'path': 'wake_foreground',
+        'launchDispatched': launchDispatched,
+        'lifecycleState': lifecycle,
+      };
+    }
+    final overlayShown = await _device.showOverlay(
+      text: text,
+      mediaUrl: mediaUrl,
+      mediaKind: mediaKind,
+      untilDismissed: untilDismissed,
+      durationSec: durationSec,
+      scheduleEndsAtEpochMs: scheduleEndsAtEpochMs,
+    );
+    return <String, dynamic>{
+      'path': overlayShown ? 'native_overlay_fallback' : 'wake_failed_overlay_failed',
+      'launchDispatched': launchDispatched,
+      'lifecycleState': lifecycle,
+      'nativeOverlayShown': overlayShown,
+    };
+  }
+
   String? _resolveMediaUrl(String? rawUrl) {
     final raw = rawUrl?.trim();
     if (raw == null || raw.isEmpty) return null;
@@ -176,6 +216,15 @@ class RealtimeDispatcher {
       return AnnouncementMediaKind.video;
     }
     return AnnouncementMediaKind.image;
+  }
+
+  VoidCallback _announcementDismissHandler({required bool resumePreviousPlayback}) {
+    if (!resumePreviousPlayback) return _player.endAnnouncementHold;
+    return () {
+      _player.endAnnouncementHold();
+      // Refresh right after instant content ends so prior playlist/schedule context resumes quickly.
+      unawaited(_playlistSync.sync(forceCommit: true));
+    };
   }
 
   void _onMessage(RealtimeMessage m) {
@@ -259,12 +308,19 @@ class RealtimeDispatcher {
       if (_dedupe(cmd.messageId)) return;
       if (!_canApplyIncoming(cmd.createdAt)) return;
       _activeOverlayCreatedAt = cmd.createdAt ?? DateTime.now().toUtc();
-      await _device.wakeAppToForeground();
       final overlayUrl = _resolveMediaUrl(cmd.mediaUrl);
       final fallbackKind = _inferMediaKind(
         mediaUrl: overlayUrl,
         mediaKindHint: cmd.mediaKind,
         contentTypeHint: cmd.contentType,
+      );
+      final takeover = await _ensureForegroundOrUseNativeOverlay(
+        text: cmd.text,
+        mediaUrl: overlayUrl,
+        mediaKind: cmd.mediaKind,
+        untilDismissed: cmd.untilDismissed,
+        durationSec: cmd.durationSec,
+        scheduleEndsAtEpochMs: null,
       );
       _player.beginAnnouncementHold();
       _announcementOverlay.show(
@@ -276,13 +332,18 @@ class RealtimeDispatcher {
         body: null,
         mediaKind: fallbackKind,
         mediaUrl: fallbackKind == AnnouncementMediaKind.none ? null : overlayUrl,
-        onDismiss: _player.endAnnouncementHold,
+        onDismiss: _announcementDismissHandler(
+          resumePreviousPlayback: cmd.resumePreviousPlayback,
+        ),
       );
       await _fleetApi.postCommandAck(
         messageId: cmd.messageId,
         commandType: 'OVERLAY_SHOW',
         ok: true,
-        detail: <String, dynamic>{'path': 'in_app_overlay'},
+        detail: <String, dynamic>{
+          ...takeover,
+          'render': 'in_app_overlay',
+        },
       );
       return;
     }
@@ -300,8 +361,16 @@ class RealtimeDispatcher {
       return;
     }
 
-    if (cmd is PlaylistUpdatedCommand || cmd is SyncRequestCommand) {
-      await _playlistSync.sync();
+    if (cmd is PlaylistUpdatedCommand) {
+      final forceCommitNow =
+          cmd.forceImmediate && !_player.announcementHold.value;
+      await _playlistSync.sync(forceCommit: forceCommitNow);
+      return;
+    }
+    if (cmd is SyncRequestCommand) {
+      final forceCommitNow =
+          cmd.forceImmediate && !_player.announcementHold.value;
+      await _playlistSync.sync(forceCommit: forceCommitNow);
       return;
     }
     if (cmd is AnnouncementCommand) {
@@ -326,9 +395,20 @@ class RealtimeDispatcher {
           : AnnouncementRenderMode.overlay;
 
       if (renderMode == AnnouncementRenderMode.overlay) {
-        await _device.wakeAppToForeground();
-        // Prevent duplicate templates/audio by keeping native overlay disabled while app is alive.
-        await _device.hideOverlay();
+        final takeover = await _ensureForegroundOrUseNativeOverlay(
+          text: cmd.title,
+          mediaUrl: url,
+          mediaKind: cmd.mediaKind,
+          untilDismissed: cmd.untilDismissed,
+          durationSec: cmd.durationSec,
+          scheduleEndsAtEpochMs: _scheduleEndsEpochMs(cmd.scheduleEndsAtUtc),
+        );
+        KioskLog.event(
+          'takeover',
+          'announcement_takeover_path',
+          level: 'info',
+          detail: takeover,
+        );
       }
 
       _announcementOverlay.show(
@@ -341,7 +421,9 @@ class RealtimeDispatcher {
         mediaKind: kind,
         mediaUrl: url,
         presentationEndsAtUtc: cmd.scheduleEndsAtUtc,
-        onDismiss: _player.endAnnouncementHold,
+        onDismiss: _announcementDismissHandler(
+          resumePreviousPlayback: cmd.resumePreviousPlayback,
+        ),
       );
       return;
     }

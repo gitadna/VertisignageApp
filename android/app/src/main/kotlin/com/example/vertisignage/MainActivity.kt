@@ -2,6 +2,8 @@ package com.example.vertisignage
 
 import android.content.Context
 import android.content.Intent
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +18,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -26,6 +29,8 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installCrashRestartHandler()
+        WatchdogState.markUiHeartbeat(applicationContext)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -54,6 +59,9 @@ class MainActivity : FlutterActivity() {
                     }
                     "clearPendingBootRecovery" -> {
                         result.success(clearPendingBootRecovery())
+                    }
+                    "consumeNativeCrashMarker" -> {
+                        result.success(consumeNativeCrashMarker())
                     }
                     "recoveryEnqueueNow" -> {
                         val reason = call.argument<String>("reason") ?: "flutter"
@@ -198,11 +206,18 @@ class MainActivity : FlutterActivity() {
     override fun onPostResume() {
         super.onPostResume()
         hideSystemUi()
+        WatchdogState.markUiHeartbeat(applicationContext)
+        enforceKioskIfDeviceOwner()
+        RecoveryScheduler.enqueueNow(applicationContext, "activity_post_resume")
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemUi()
+        if (hasFocus) {
+            hideSystemUi()
+            WatchdogState.markUiHeartbeat(applicationContext)
+            enforceKioskIfDeviceOwner()
+        }
     }
 
     private fun hideSystemUi() {
@@ -307,6 +322,7 @@ class MainActivity : FlutterActivity() {
         private const val KIOSK_CHANNEL = "vertisignage/kiosk"
         private const val PUSH_BRIDGE_CHANNEL = "vertisignage/push_bridge"
         private const val TAG = "VertiSignageBG"
+        private val CRASH_HANDLER_INSTALLED = AtomicBoolean(false)
     }
 
     private fun bgPrefs(): android.content.SharedPreferences {
@@ -366,6 +382,28 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun consumeNativeCrashMarker(): HashMap<String, Any?> {
+        return try {
+            val prefs = bgPrefs()
+            val atMs = prefs.getLong("native_crash_at_ms", 0L)
+            val reason = prefs.getString("native_crash_reason", null)
+            prefs.edit()
+                .remove("native_crash_at_ms")
+                .remove("native_crash_reason")
+                .apply()
+            hashMapOf(
+                "crashed" to (atMs > 0L),
+                "atMs" to atMs,
+                "reason" to reason,
+            )
+        } catch (t: Throwable) {
+            hashMapOf(
+                "crashed" to false,
+                "reason" to "error:${t::class.java.simpleName}",
+            )
+        }
+    }
+
     private fun isIgnoringBatteryOptimizations(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -374,12 +412,21 @@ class MainActivity : FlutterActivity() {
 
     private fun openBatteryOptimizationSettings(): Boolean = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            startActivity(
-                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                },
-            )
-            true
+            val directIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (directIntent.resolveActivity(packageManager) != null) {
+                startActivity(directIntent)
+                true
+            } else {
+                startActivity(
+                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    },
+                )
+                true
+            }
         } else {
             false
         }
@@ -402,6 +449,10 @@ class MainActivity : FlutterActivity() {
             Intent().setClassName(
                 "com.oppo.safe",
                 "com.oppo.safe.permission.startup.StartupAppListActivity",
+            ),
+            Intent().setClassName(
+                "com.coloros.oppoguardelf",
+                "com.coloros.powermanager.fuelgaue.PowerUsageModelActivity",
             ),
             // Vivo / iQOO
             Intent().setClassName(
@@ -429,6 +480,11 @@ class MainActivity : FlutterActivity() {
             Intent().setClassName(
                 "com.samsung.android.sm_cn",
                 "com.samsung.android.sm.ui.battery.BatteryActivity",
+            ),
+            // Realme
+            Intent().setClassName(
+                "com.realme.safecenter",
+                "com.realme.safecenter.permission.startup.StartupAppListActivity",
             ),
         )
 
@@ -465,6 +521,56 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun enforceKioskIfDeviceOwner() {
+        try {
+            if (!policyManager.isDeviceOwner()) return
+            policyManager.applyKioskPolicies()
+            if (!policyManager.isInLockTask()) {
+                policyManager.enterLockTask(this)
+            }
+        } catch (_: Throwable) {
+            // Best effort: never crash lifecycle on policy re-assertion.
+        }
+    }
+
+    private fun installCrashRestartHandler() {
+        if (!CRASH_HANDLER_INSTALLED.compareAndSet(false, true)) return
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        val appContext = applicationContext
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val reason = "${throwable::class.java.simpleName}:${throwable.message}"
+                WatchdogState.recordNativeCrash(appContext, reason)
+                RecoveryScheduler.enqueueNow(appContext, "native_crash")
+                RecoveryScheduler.scheduleAlarmFallback(appContext, "native_crash", 3_000L)
+                val am = appContext.getSystemService(AlarmManager::class.java)
+                val launch = Intent(appContext, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+                val pi = PendingIntent.getActivity(
+                    appContext,
+                    29991,
+                    launch,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    am?.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 2_000L, pi)
+                } else {
+                    @Suppress("DEPRECATION")
+                    am?.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 2_000L, pi)
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "event=crash_handler_failed source=MainActivity msg=${t::class.java.simpleName}:${t.message}")
+            } finally {
+                previous?.uncaughtException(thread, throwable)
+                    ?: run {
+                        android.os.Process.killProcess(android.os.Process.myPid())
+                        kotlin.system.exitProcess(10)
+                    }
+            }
+        }
+    }
+
     private fun showOverlay(
         text: String,
         mediaUrl: String?,
@@ -475,7 +581,7 @@ class MainActivity : FlutterActivity() {
         scheduleEndsAtEpochMs: Long = 0L,
     ): Boolean {
         if (!canDrawOverlays()) return false
-        CommandRelay.showOverlay(
+        val shown = CommandRelay.showOverlay(
             context = this,
             text = text,
             mediaUrl = mediaUrl,
@@ -485,8 +591,10 @@ class MainActivity : FlutterActivity() {
             opacity = opacity,
             scheduleEndEpochMs = scheduleEndsAtEpochMs,
         )
-        wakeApp()
-        return true
+        if (shown) {
+            wakeApp()
+        }
+        return shown
     }
 
     private fun hideOverlay() {

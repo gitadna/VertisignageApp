@@ -10,6 +10,11 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
         if (!ALLOWED_ACTIONS.contains(action)) return
+        if (isInitialStickyBroadcast) return
+        if (action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            val replacedPackage = intent.data?.schemeSpecificPart
+            if (!replacedPackage.isNullOrBlank() && replacedPackage != context.packageName) return
+        }
 
         val storageContext =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) context.createDeviceProtectedStorageContext()
@@ -35,6 +40,7 @@ class BootReceiver : BroadcastReceiver() {
 
         RecoveryScheduler.ensurePeriodic(storageContext, "boot:$action")
         RecoveryScheduler.enqueueNow(storageContext, "boot:$action")
+        RecoveryScheduler.scheduleAlarmFallback(storageContext, "boot:$action", 20_000L)
 
         try {
             val serviceIntent = Intent(context, KioskForegroundService::class.java).apply {
@@ -42,6 +48,7 @@ class BootReceiver : BroadcastReceiver() {
                 putExtra(EXTRA_BOOT_ACTION, action)
             }
             ContextCompat.startForegroundService(context, serviceIntent)
+            CommandRelay.wakeApp(context)
         } catch (_: Throwable) {
             // Fail safe: the system/OEM may block background/FGS start; recovery worker will act as fallback.
             prefs.edit()
@@ -49,6 +56,7 @@ class BootReceiver : BroadcastReceiver() {
                 .putString(KEY_PENDING_BOOT_RECOVERY_REASON, "fgs_start_blocked:$action")
                 .apply()
             RecoveryScheduler.enqueueNow(storageContext, "boot_fgs_start_blocked:$action")
+            RecoveryScheduler.scheduleAlarmFallback(storageContext, "boot_fgs_start_blocked:$action", 10_000L)
         }
     }
 

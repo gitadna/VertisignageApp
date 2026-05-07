@@ -16,6 +16,7 @@ import android.os.Looper
 import android.content.pm.ServiceInfo
 import android.provider.Settings
 import android.media.MediaPlayer
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -144,6 +145,9 @@ class OverlayWindowService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             !Settings.canDrawOverlays(this)
         ) {
+            log("overlay_permission_missing", "show_blocked")
+            RecoveryScheduler.enqueueNow(applicationContext, "overlay_permission_missing")
+            CommandRelay.wakeApp(this)
             return
         }
         val bgOpacity = (opacity.coerceIn(0.5f, 1f) * 255).toInt()
@@ -237,7 +241,14 @@ class OverlayWindowService : Service() {
             PixelFormat.TRANSLUCENT,
         )
         params.gravity = Gravity.TOP or Gravity.START
-        wm?.addView(root, params)
+        try {
+            wm?.addView(root, params)
+        } catch (t: Throwable) {
+            log("overlay_add_view_failed", "${t::class.java.simpleName}:${t.message}")
+            RecoveryScheduler.enqueueNow(applicationContext, "overlay_add_view_failed")
+            CommandRelay.wakeApp(this)
+            return
+        }
         overlayRoot = root
         overlayText = tv
         overlayImage = image
@@ -245,6 +256,7 @@ class OverlayWindowService : Service() {
         overlayWeb = web
         bindMedia(mediaUrl, mediaKind)
         scheduleAutoHide(untilDismissed, durationSec, scheduleEndEpochMs)
+        log("overlay_shown", "kind=${mediaKind ?: "auto"} untilDismissed=$untilDismissed")
     }
 
     private fun hideOverlay() {
@@ -262,6 +274,7 @@ class OverlayWindowService : Service() {
         overlayImage = null
         overlayVideo = null
         overlayWeb = null
+        log("overlay_hidden", "ok")
     }
 
     private fun bindMedia(mediaUrl: String?, mediaKind: String?) {
@@ -411,5 +424,22 @@ class OverlayWindowService : Service() {
         const val EXTRA_DURATION_SEC = "durationSec"
         const val EXTRA_OPACITY = "opacity"
         const val EXTRA_SCHEDULE_END_EPOCH_MS = "scheduleEndEpochMs"
+        private const val TAG = "VertiSignageBG"
+    }
+
+    private fun log(event: String, msg: String, level: Int = Log.INFO) {
+        val out =
+            buildString {
+                append("event=").append(event)
+                append(" source=OverlayWindowService")
+                append(" api=").append(Build.VERSION.SDK_INT)
+                append(" manufacturer=").append(Build.MANUFACTURER ?: "unknown")
+                append(" msg=").append(msg)
+            }
+        when (level) {
+            Log.WARN -> Log.w(TAG, out)
+            Log.ERROR -> Log.e(TAG, out)
+            else -> Log.i(TAG, out)
+        }
     }
 }

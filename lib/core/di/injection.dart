@@ -69,7 +69,7 @@ Future<void> configureDependencies() async {
 
   sl.registerLazySingleton<DeviceService>(DeviceService.new);
   sl.registerLazySingleton<DeviceFingerprintService>(
-    DeviceFingerprintService.new,
+    () => DeviceFingerprintService(sl<LocalStorage>()),
   );
 
   sl.registerLazySingleton<PushRegistrationCoordinator>(

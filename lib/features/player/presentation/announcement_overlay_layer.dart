@@ -182,7 +182,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         final w = sz.width;
         final h = sz.height;
         if (w <= 0 || h <= 0) {
-          return const ColoredBox(color: Colors.black);
+          return _buildTextFallback();
         }
         return ColoredBox(
           color: Colors.black,
@@ -215,7 +215,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         url != null &&
         url.isNotEmpty &&
         _videoFailed) {
-      return const ColoredBox(color: Colors.black);
+      return _buildTextFallback();
     }
 
     if (widget.kind == AnnouncementMediaKind.image &&
@@ -229,7 +229,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
             effectiveUrl,
             fit: BoxFit.cover,
             alignment: Alignment.center,
-            errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black),
+            errorBuilder: (_, _, _) => _buildTextFallback(),
             loadingBuilder: (ctx, child, progress) {
               if (progress == null) return child;
               return Center(
@@ -249,7 +249,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         !_webFailed) {
       final uri = Uri.tryParse(_effectiveUrl(url));
       if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
-        return const ColoredBox(color: Colors.black);
+        return _buildTextFallback();
       }
       return ColoredBox(
         color: Colors.black,
@@ -264,6 +264,10 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
       );
     }
 
+    return _buildTextFallback();
+  }
+
+  Widget _buildTextFallback() {
     final message = [
       widget.title.trim(),
       widget.body?.trim() ?? '',

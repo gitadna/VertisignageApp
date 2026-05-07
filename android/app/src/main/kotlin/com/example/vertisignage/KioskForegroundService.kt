@@ -8,11 +8,13 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
 class KioskForegroundService : Service() {
     private var foregroundStarted = false
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -23,12 +25,17 @@ class KioskForegroundService : Service() {
             action = null,
             reason = null,
         )
+        WatchdogState.markServiceHeartbeat(applicationContext)
+        acquireWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         val startSource = intent?.getStringExtra(BootReceiver.EXTRA_START_SOURCE)
         val bootAction = intent?.getStringExtra(BootReceiver.EXTRA_BOOT_ACTION)
+        val forceWakeUi = intent?.getBooleanExtra(RecoveryWorker.EXTRA_FORCE_WAKE_UI, false) == true
+        WatchdogState.markServiceHeartbeat(applicationContext)
+        acquireWakeLock()
 
         log(
             event = "service_start_command",
@@ -42,6 +49,7 @@ class KioskForegroundService : Service() {
         )
 
         RecoveryScheduler.enqueueNow(applicationContext, "service_start_command:${action ?: "null"}")
+        RecoveryScheduler.scheduleAlarmFallback(applicationContext, "service_start", 120_000L)
 
         // Idempotent foreground promotion: multiple startService/startForegroundService calls can race at boot.
         if (!foregroundStarted) {
@@ -86,6 +94,10 @@ class KioskForegroundService : Service() {
 
             if (shouldWake) {
                 val ok = CommandRelay.wakeApp(this)
+                if (!ok) {
+                    RecoveryScheduler.enqueueNow(applicationContext, "wake_failed:$action")
+                    RecoveryScheduler.scheduleAlarmFallback(applicationContext, "wake_failed:$action", 15_000L)
+                }
                 log(
                     event = "wake_app",
                     action = action,
@@ -99,16 +111,32 @@ class KioskForegroundService : Service() {
                 )
             }
         }
+        if (forceWakeUi) {
+            val ok = CommandRelay.wakeApp(this)
+            if (!ok) {
+                RecoveryScheduler.enqueueNow(applicationContext, "force_wake_failed")
+                RecoveryScheduler.scheduleAlarmFallback(applicationContext, "force_wake_failed", 15_000L)
+            }
+        }
         return START_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         log(event = "service_task_removed", action = null, reason = null, level = Log.WARN)
-        CommandRelay.wakeApp(this)
+        RecoveryScheduler.enqueueNow(applicationContext, "service_task_removed")
+        val ok = CommandRelay.wakeApp(this)
+        if (!ok) {
+            RecoveryScheduler.scheduleAlarmFallback(applicationContext, "task_removed_wake_failed", 10_000L)
+        }
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?) = null
+
+    override fun onDestroy() {
+        releaseWakeLock()
+        super.onDestroy()
+    }
 
     private fun createChannelIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -149,6 +177,28 @@ class KioskForegroundService : Service() {
             .build()
     }
 
+    private fun acquireWakeLock() {
+        try {
+            val pm = getSystemService(PowerManager::class.java) ?: return
+            val lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:KioskFg")
+            lock.setReferenceCounted(false)
+            lock.acquire(WAKELOCK_TIMEOUT_MS)
+            wakeLock = lock
+        } catch (_: Throwable) {
+            // Best effort: no wake lock should never crash the service.
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+        } catch (_: Throwable) {
+            // ignore
+        } finally {
+            wakeLock = null
+        }
+    }
+
     private fun log(
         event: String,
         action: String?,
@@ -182,5 +232,6 @@ class KioskForegroundService : Service() {
         private val LOCK = Any()
         private var lastWakeAtMs: Long = 0L
         private const val WAKE_DEDUPE_WINDOW_MS = 3_000L
+        private const val WAKELOCK_TIMEOUT_MS = 10 * 60_000L
     }
 }

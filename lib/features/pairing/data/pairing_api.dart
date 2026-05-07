@@ -15,9 +15,11 @@ class PairingApi {
     required String licenseId,
     required String deviceName,
     String? fingerprint,
+    String? orgEnrollmentCode,
   }) async {
     final normalized = licenseId.trim().toUpperCase();
     final normalizedName = deviceName.trim();
+    final normalizedOrgCode = orgEnrollmentCode?.trim().toUpperCase();
     if (normalized.isEmpty) {
       throw const AppNetworkException('License ID is required');
     }
@@ -34,6 +36,8 @@ class PairingApi {
           'deviceName': normalizedName,
           if (fingerprint != null && fingerprint.isNotEmpty)
             'fingerprint': fingerprint,
+          if (normalizedOrgCode != null && normalizedOrgCode.isNotEmpty)
+            'orgEnrollmentCode': normalizedOrgCode,
         },
       );
 

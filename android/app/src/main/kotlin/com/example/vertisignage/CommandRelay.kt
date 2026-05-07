@@ -49,8 +49,12 @@ object CommandRelay {
         }
     }
 
-    fun hideOverlay(context: Context) {
-        context.stopService(Intent(context, OverlayWindowService::class.java))
+    fun hideOverlay(context: Context): Boolean {
+        return try {
+            context.stopService(Intent(context, OverlayWindowService::class.java))
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     fun showOverlay(
@@ -62,18 +66,23 @@ object CommandRelay {
         durationSec: Int,
         opacity: Double,
         scheduleEndEpochMs: Long = 0L,
-    ) {
-        val intent = Intent(context, OverlayWindowService::class.java).apply {
-            action = OverlayWindowService.ACTION_SHOW
-            putExtra(OverlayWindowService.EXTRA_TEXT, text)
-            putExtra(OverlayWindowService.EXTRA_MEDIA_URL, mediaUrl)
-            putExtra(OverlayWindowService.EXTRA_MEDIA_KIND, mediaKind)
-            putExtra(OverlayWindowService.EXTRA_UNTIL_DISMISSED, untilDismissed)
-            putExtra(OverlayWindowService.EXTRA_DURATION_SEC, durationSec)
-            putExtra(OverlayWindowService.EXTRA_OPACITY, opacity)
-            putExtra(OverlayWindowService.EXTRA_SCHEDULE_END_EPOCH_MS, scheduleEndEpochMs)
+    ): Boolean {
+        return try {
+            val intent = Intent(context, OverlayWindowService::class.java).apply {
+                action = OverlayWindowService.ACTION_SHOW
+                putExtra(OverlayWindowService.EXTRA_TEXT, text)
+                putExtra(OverlayWindowService.EXTRA_MEDIA_URL, mediaUrl)
+                putExtra(OverlayWindowService.EXTRA_MEDIA_KIND, mediaKind)
+                putExtra(OverlayWindowService.EXTRA_UNTIL_DISMISSED, untilDismissed)
+                putExtra(OverlayWindowService.EXTRA_DURATION_SEC, durationSec)
+                putExtra(OverlayWindowService.EXTRA_OPACITY, opacity)
+                putExtra(OverlayWindowService.EXTRA_SCHEDULE_END_EPOCH_MS, scheduleEndEpochMs)
+            }
+            ContextCompat.startForegroundService(context, intent)
+            true
+        } catch (_: Throwable) {
+            false
         }
-        ContextCompat.startForegroundService(context, intent)
     }
 
 }

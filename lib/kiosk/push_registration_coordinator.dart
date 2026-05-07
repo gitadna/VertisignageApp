@@ -28,6 +28,7 @@ class PushRegistrationCoordinator {
 
   bool _listening = false;
   StreamSubscription<String>? _tokenRefreshSub;
+  Timer? _contextRefreshTimer;
 
   void start() {
     if (_listening) return;
@@ -35,10 +36,17 @@ class PushRegistrationCoordinator {
     _listening = true;
     _tokenStore.addListener(_sync);
     _tokenRefreshSub = FirebaseMessaging.instance.onTokenRefresh.listen(
-      _postTokenSafe,
+      (token) async {
+        await _postTokenSafe(token);
+        await _sync();
+      },
       onError: (Object e, StackTrace st) {
         KioskLog.e('PushRegistration.onTokenRefresh', e, st);
       },
+    );
+    _contextRefreshTimer ??= Timer.periodic(
+      const Duration(minutes: 10),
+      (_) => unawaited(_sync()),
     );
     unawaited(_sync());
   }
@@ -49,6 +57,8 @@ class PushRegistrationCoordinator {
     _tokenStore.removeListener(_sync);
     _tokenRefreshSub?.cancel();
     _tokenRefreshSub = null;
+    _contextRefreshTimer?.cancel();
+    _contextRefreshTimer = null;
   }
 
   Future<void> _postTokenSafe(String token) async {

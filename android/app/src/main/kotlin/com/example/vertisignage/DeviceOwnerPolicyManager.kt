@@ -22,6 +22,13 @@ class DeviceOwnerPolicyManager(private val context: Context) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     dpm.setLockTaskFeatures(admin, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
                 }
+                dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_SAFE_BOOT)
+                dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_FACTORY_RESET)
+                dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_ADD_USER)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    dpm.setStatusBarDisabled(admin, true)
+                    dpm.setKeyguardDisabled(admin, true)
+                }
                 true
             }
         } catch (_: Exception) {
@@ -35,6 +42,13 @@ class DeviceOwnerPolicyManager(private val context: Context) {
                 false
             } else {
                 dpm.setLockTaskPackages(admin, emptyArray())
+                dpm.clearUserRestriction(admin, android.os.UserManager.DISALLOW_SAFE_BOOT)
+                dpm.clearUserRestriction(admin, android.os.UserManager.DISALLOW_FACTORY_RESET)
+                dpm.clearUserRestriction(admin, android.os.UserManager.DISALLOW_ADD_USER)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    dpm.setStatusBarDisabled(admin, false)
+                    dpm.setKeyguardDisabled(admin, false)
+                }
                 true
             }
         } catch (_: Exception) {

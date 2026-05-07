@@ -7,6 +7,7 @@ import '../../../core/errors/app_exception.dart';
 import '../../../models/playlist_bundle.dart';
 import '../../../models/playlist_item.dart';
 import '../../../models/playlist_schedule_context.dart';
+import '../../../services/device_service.dart';
 import '../../../services/token_store.dart';
 import 'device_heartbeat_service.dart';
 import 'media_cache_service.dart';
@@ -24,6 +25,7 @@ class PlaylistSyncService extends ChangeNotifier {
     required MediaCacheService cache,
     required TokenStore tokenStore,
     required DeviceHeartbeatService heartbeat,
+    required DeviceService device,
     PlayerTelemetry? telemetry,
     PlaylistSyncDiagnostic? logDiagnostic,
   })  : _storage = storage,
@@ -31,6 +33,7 @@ class PlaylistSyncService extends ChangeNotifier {
         _cache = cache,
         _tokenStore = tokenStore,
         _heartbeat = heartbeat,
+        _device = device,
         _telemetry = telemetry,
         _logDiagnostic = logDiagnostic;
 
@@ -39,6 +42,7 @@ class PlaylistSyncService extends ChangeNotifier {
   final MediaCacheService _cache;
   final TokenStore _tokenStore;
   final DeviceHeartbeatService _heartbeat;
+  final DeviceService _device;
   final PlayerTelemetry? _telemetry;
   final PlaylistSyncDiagnostic? _logDiagnostic;
 
@@ -109,8 +113,16 @@ class PlaylistSyncService extends ChangeNotifier {
     _scheduleBoundaryTimer(bundle.nextBoundaryUtc);
   }
 
+  bool _forceCommitNextRun = false;
+
   /// Coalesced sync: at most one run in flight; duplicate callers get merged.
-  Future<void> sync() async {
+  ///
+  /// When [forceCommit] is true, any prefetched playlist that lands during this run is promoted
+  /// to active playback immediately, instead of waiting for the next slide boundary. Use this
+  /// whenever the backend indicates an explicit content-replacement event (force-immediate
+  /// PLAYLIST_UPDATED), so kiosks reflect admin changes within a second even mid-video.
+  Future<void> sync({bool forceCommit = false}) async {
+    if (forceCommit) _forceCommitNextRun = true;
     if (_syncRunning) {
       _syncQueued = true;
       return;
@@ -119,6 +131,10 @@ class PlaylistSyncService extends ChangeNotifier {
     notifyListeners();
     try {
       await _runSync();
+      if (_forceCommitNextRun) {
+        _forceCommitNextRun = false;
+        commitPendingPlaylistImmediately();
+      }
     } finally {
       _syncRunning = false;
       notifyListeners();
@@ -284,8 +300,20 @@ class PlaylistSyncService extends ChangeNotifier {
     if (wait.isNegative) wait = Duration.zero;
     const maxWait = Duration(hours: 24);
     if (wait > maxWait) wait = maxWait;
+    // Schedule edges that were already in the past or are <= 1s away should re-sync immediately AND
+    // again ~1s later, in case the server's `nextBoundaryUtc` is slightly ahead of our wall clock or
+    // the kiosk lost the previous notification while the schedule lifecycle worker was still mid-tick.
+    final isEdge = wait <= const Duration(seconds: 1);
     _boundaryTimer = Timer(wait, () {
-      unawaited(sync());
+      unawaited(_device.recoveryEnqueueNow('schedule_boundary_hit'));
+      unawaited(sync(forceCommit: true));
+      if (isEdge) {
+        unawaited(_device.recoveryEnqueueNow('schedule_boundary_edge'));
+        Timer(const Duration(seconds: 1), () {
+          unawaited(_device.recoveryEnqueueNow('schedule_boundary_retry'));
+          unawaited(sync(forceCommit: true));
+        });
+      }
     });
   }
 
@@ -293,6 +321,23 @@ class PlaylistSyncService extends ChangeNotifier {
   bool commitPendingPlaylistAtBoundary() {
     final pending = _pendingPlayable;
     if (pending == null || pending.isEmpty) return false;
+    if (_playlistRowsEqual(_active, pending)) {
+      _pendingPlayable = null;
+      return false;
+    }
+    _pendingPlayable = null;
+    _active = pending;
+    _epoch++;
+    notifyListeners();
+    return true;
+  }
+
+  /// Promote the prefetched playlist immediately, even mid-slide. Used when the backend signals an
+  /// explicit content-replacement event (force-immediate PLAYLIST_UPDATED). Returns true when the
+  /// active playlist actually changed (so the caller can re-arm UI accordingly).
+  bool commitPendingPlaylistImmediately() {
+    final pending = _pendingPlayable;
+    if (pending == null) return false;
     if (_playlistRowsEqual(_active, pending)) {
       _pendingPlayable = null;
       return false;

@@ -48,11 +48,17 @@ class _AppShellState extends State<AppShell> {
     final c = _pairingController;
     if (c == null) return;
     _triedAutoRecover = true;
+
+    // Only auto-recover when this install already has a prior pairing context.
+    // Fresh installs MUST go through manual pairing so they can never claim
+    // another device's identity via a colliding fingerprint.
     if (_tokenStore.savedLicenseId != null && _tokenStore.savedDeviceName != null) {
       c.recoverFromSavedLicense();
       return;
     }
-    c.recoverFromFingerprint();
+    if (_tokenStore.loadPairedDevice() != null) {
+      c.recoverFromFingerprint();
+    }
   }
 
   void _onPairingChanged() {

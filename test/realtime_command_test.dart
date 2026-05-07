@@ -48,5 +48,23 @@ void main() {
       final a = cmd as AnnouncementCommand;
       expect(a.scheduleEndsAtUtc?.toIso8601String(), '2026-05-05T18:00:00.000Z');
     });
+
+    test('parses ANNOUNCEMENT resumePreviousPlayback flag', () {
+      final cmd = parseRealtimeCommand(
+        '{"type":"ANNOUNCEMENT","payload":{"announcementId":"a1","title":"T","durationSec":15,"resumePreviousPlayback":true}}',
+      );
+      expect(cmd, isA<AnnouncementCommand>());
+      final a = cmd as AnnouncementCommand;
+      expect(a.resumePreviousPlayback, isTrue);
+    });
+
+    test('parses OVERLAY_SHOW resumePreviousPlayback flag', () {
+      final cmd = parseRealtimeCommand(
+        '{"type":"OVERLAY_SHOW","payload":{"messageId":"m1","text":"hello","resumePreviousPlayback":true}}',
+      );
+      expect(cmd, isA<OverlayShowCommand>());
+      final o = cmd as OverlayShowCommand;
+      expect(o.resumePreviousPlayback, isTrue);
+    });
   });
 }

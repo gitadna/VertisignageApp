@@ -399,6 +399,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final boxFit = boxFitFromPlaylistMode(item.fitMode);
 
     if (state.isWebSlide && state.webUri != null) {
+      if (item.mediaKind == PlaylistMediaKind.url &&
+          state.urlRenderMode == UrlRenderMode.video) {
+        return VideoSlideLayer(
+          networkUri: state.webUri,
+          fit: boxFit,
+          muted: item.muted,
+          generation: state.generation,
+          onEnded: ctrl.onVideoEnded,
+          playbackPaused: ctrl.playbackSuspended,
+        );
+      }
       return WebSlideLayer(
         uri: state.webUri!,
         onLoadSuccess: ctrl.onWebLoadSuccess,

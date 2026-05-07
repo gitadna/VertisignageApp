@@ -7,6 +7,8 @@ import '../../../models/playlist_item.dart';
 import '../data/media_cache_service.dart';
 import '../data/playlist_sync_service.dart';
 
+enum UrlRenderMode { web, video }
+
 /// Current slide and resolved media (`localPath` for files, `webUri` for URL slides).
 class PlayerDisplayState {
   const PlayerDisplayState({
@@ -14,15 +16,23 @@ class PlayerDisplayState {
     required this.generation,
     this.localPath,
     this.webUri,
+    this.urlRenderMode = UrlRenderMode.web,
+    this.urlVideoFallbackUsed = false,
   });
 
   final PlaylistItem item;
   final int generation;
   final String? localPath;
   final Uri? webUri;
+  final UrlRenderMode urlRenderMode;
+  final bool urlVideoFallbackUsed;
 
   bool get isWebSlide => webUri != null;
   bool get isFileSlide => localPath != null;
+  bool get isUrlVideoMode =>
+      item.mediaKind == PlaylistMediaKind.url &&
+      webUri != null &&
+      urlRenderMode == UrlRenderMode.video;
 }
 
 /// Drives playlist timing, caching, preload, and resilient skipping across media kinds.
@@ -143,7 +153,9 @@ class PlayerController {
     final gen = state.generation;
     final item = state.item;
 
-    if (item.mediaKind == PlaylistMediaKind.url && state.isWebSlide) {
+    if (item.mediaKind == PlaylistMediaKind.url &&
+        state.isWebSlide &&
+        state.urlRenderMode == UrlRenderMode.web) {
       final ms = item.durationMs <= 0 ? 10000 : item.durationMs;
       _armProgressWatchdog(gen);
       _slideTimer = Timer(Duration(milliseconds: ms), () {
@@ -152,13 +164,10 @@ class PlayerController {
       return;
     }
 
-    _armProgressWatchdog(gen);
-    if (item.mediaKind == PlaylistMediaKind.video) {
-      // Videos advance via VideoSlideLayer -> onVideoEnded; don't schedule dwell.
-      return;
-    }
-
     final ms = item.durationMs <= 0 ? 10000 : item.durationMs;
+    if (item.mediaKind != PlaylistMediaKind.video && !state.isUrlVideoMode) {
+      _armProgressWatchdog(gen);
+    }
     _slideTimer = Timer(Duration(milliseconds: ms), () {
       unawaited(_onDwellElapsed(gen));
     });
@@ -228,6 +237,18 @@ class PlayerController {
     });
   }
 
+  bool _looksLikeDirectVideoUrl(String rawUrl) {
+    final u = rawUrl.trim().toLowerCase();
+    return RegExp(r'\.(mp4|webm|m3u8|mov)(\?|$)').hasMatch(u);
+  }
+
+  bool _shouldPreferVideoForUrl(PlaylistItem item) {
+    if (item.mediaKind != PlaylistMediaKind.url) return false;
+    if (item.urlPlaybackKind == UrlPlaybackKind.videoPreferred) return true;
+    if (item.urlPlaybackKind == UrlPlaybackKind.webPreferred) return false;
+    return _looksLikeDirectVideoUrl(item.url);
+  }
+
   Future<void> _goToNextSlide() async {
     if (!_running) return;
     _cancelTimers();
@@ -267,16 +288,24 @@ class PlayerController {
         item: item,
         generation: gen,
         webUri: uri,
+        urlRenderMode: _shouldPreferVideoForUrl(item)
+            ? UrlRenderMode.video
+            : UrlRenderMode.web,
       );
 
-      _webLoadTimer = Timer(const Duration(seconds: 15), () {
-        if (!_running) return;
-        if (display.value?.generation != gen) return;
-        unawaited(onWebLoadFailed());
-      });
-
       if (!playbackSuspended.value) {
-        _armProgressWatchdog(gen);
+        if (display.value?.urlRenderMode == UrlRenderMode.web) {
+          _webLoadTimer = Timer(const Duration(seconds: 15), () {
+            if (!_running) return;
+            if (display.value?.generation != gen) return;
+            unawaited(onWebLoadFailed());
+          });
+          _armProgressWatchdog(gen);
+        }
+        final ms = item.durationMs <= 0 ? 10000 : item.durationMs;
+        _slideTimer = Timer(Duration(milliseconds: ms), () {
+          unawaited(_onDwellElapsed(gen));
+        });
       }
 
       unawaited(_preloadNext());
@@ -302,13 +331,13 @@ class PlayerController {
     unawaited(_preloadNext());
 
     if (!playbackSuspended.value) {
-      _armProgressWatchdog(gen);
       if (item.mediaKind != PlaylistMediaKind.video) {
-        final ms = item.durationMs <= 0 ? 10000 : item.durationMs;
-        _slideTimer = Timer(Duration(milliseconds: ms), () {
-          unawaited(_onDwellElapsed(gen));
-        });
+        _armProgressWatchdog(gen);
       }
+      final ms = item.durationMs <= 0 ? 10000 : item.durationMs;
+      _slideTimer = Timer(Duration(milliseconds: ms), () {
+        unawaited(_onDwellElapsed(gen));
+      });
     }
   }
 
@@ -360,6 +389,34 @@ class PlayerController {
     final state = display.value;
     final item = state?.item;
     final itemKey = '${item?.id ?? 'unknown'}|${item?.url ?? ''}';
+
+    if (hadError &&
+        state != null &&
+        state.isUrlVideoMode &&
+        !state.urlVideoFallbackUsed &&
+        state.webUri != null) {
+      _cancelTimers();
+      display.value = PlayerDisplayState(
+        item: state.item,
+        generation: state.generation,
+        webUri: state.webUri,
+        urlRenderMode: UrlRenderMode.web,
+        urlVideoFallbackUsed: true,
+      );
+      if (!playbackSuspended.value) {
+        _webLoadTimer = Timer(const Duration(seconds: 15), () {
+          if (!_running) return;
+          if (display.value?.generation != generation) return;
+          unawaited(onWebLoadFailed());
+        });
+        _armProgressWatchdog(generation);
+        final ms = state.item.durationMs <= 0 ? 10000 : state.item.durationMs;
+        _slideTimer = Timer(Duration(milliseconds: ms), () {
+          unawaited(_onDwellElapsed(generation));
+        });
+      }
+      return;
+    }
 
     if (!hadError) {
       _videoErrorBurstCount = 0;

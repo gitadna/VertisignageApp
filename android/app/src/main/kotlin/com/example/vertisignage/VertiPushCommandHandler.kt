@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -14,6 +15,8 @@ import java.util.TimeZone
 
 object VertiPushCommandHandler {
     private val mainHandler = Handler(Looper.getMainLooper())
+    private const val TAG = "VertiSignageBG"
+    private const val CONTEXT_STALE_MS = 6 * 60 * 60 * 1000L
 
     /**
      * @return true if VertiSignage consumed the message (do not forward to Flutter pipeline).
@@ -42,8 +45,16 @@ object VertiPushCommandHandler {
 
     private fun fetchAndShowAnnouncement(context: Context, announcementId: String): Boolean {
         val (apiBase, bearer, deviceId) = PushContextStore.read(context)
+        val contextAgeMs = PushContextStore.ageMs(context)
+        if (contextAgeMs > CONTEXT_STALE_MS) {
+            logFailure("stale_push_context", "announcementId=$announcementId ageMs=$contextAgeMs")
+            RecoveryScheduler.enqueueNow(context, "push_context_stale:$announcementId")
+        }
         if (apiBase.isNullOrBlank() || bearer.isNullOrBlank() || deviceId.isNullOrBlank()) {
-            return true
+            logFailure("missing_push_context", "announcementId=$announcementId")
+            RecoveryScheduler.enqueueNow(context, "push_missing_context:$announcementId")
+            CommandRelay.wakeApp(context)
+            return false
         }
         Thread {
             try {
@@ -66,9 +77,19 @@ object VertiPushCommandHandler {
                 conn.disconnect()
                 val root = JSONObject(body)
                 val envelope = root.optJSONObject("data") ?: return@Thread
-                maybeShowAnnouncementEnvelope(context.applicationContext, envelope)
-            } catch (_: Exception) {
-                /* ignore */
+                val consumed = maybeShowAnnouncementEnvelope(context.applicationContext, envelope)
+                if (!consumed) {
+                    logFailure("fetch_payload_invalid", "announcementId=$announcementId")
+                    RecoveryScheduler.enqueueNow(context, "push_payload_invalid:$announcementId")
+                    CommandRelay.wakeApp(context)
+                }
+            } catch (t: Exception) {
+                logFailure(
+                    "fetch_failed",
+                    "announcementId=$announcementId ${t::class.java.simpleName}:${t.message}",
+                )
+                RecoveryScheduler.enqueueNow(context, "push_fetch_failed:$announcementId")
+                CommandRelay.wakeApp(context)
             }
         }.start()
         return true
@@ -138,11 +159,14 @@ object VertiPushCommandHandler {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
                 !Settings.canDrawOverlays(context)
             ) {
+                logFailure("overlay_permission_missing", "announcementId=$announcementId")
+                RecoveryScheduler.enqueueNow(context, "overlay_permission_missing:$announcementId")
                 CommandRelay.wakeApp(context)
                 return@post
             }
-            CommandRelay.wakeApp(context)
-            CommandRelay.showOverlay(
+            val wakeOk = CommandRelay.wakeApp(context)
+            val shown =
+                CommandRelay.showOverlay(
                 context = context,
                 text = title,
                 mediaUrl = mediaUrl,
@@ -152,7 +176,19 @@ object VertiPushCommandHandler {
                 opacity = 0.9,
                 scheduleEndEpochMs = scheduleEndEpochMs,
             )
+            if (!shown) {
+                logFailure("overlay_start_failed", "announcementId=$announcementId wakeOk=$wakeOk")
+                RecoveryScheduler.enqueueNow(context, "overlay_start_failed:$announcementId")
+                CommandRelay.wakeApp(context)
+            }
         }
         return true
+    }
+
+    private fun logFailure(reason: String, msg: String) {
+        Log.w(
+            TAG,
+            "event=push_takeover_failure source=VertiPushCommandHandler reason=$reason api=${Build.VERSION.SDK_INT} manufacturer=${Build.MANUFACTURER ?: "unknown"} msg=$msg",
+        )
     }
 }

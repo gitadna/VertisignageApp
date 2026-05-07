@@ -23,6 +23,29 @@ enum PlaylistMediaKind {
       };
 }
 
+enum UrlPlaybackKind {
+  videoPreferred,
+  webPreferred,
+  unknown;
+
+  static UrlPlaybackKind parse(String? raw) {
+    switch ((raw ?? '').toLowerCase()) {
+      case 'video':
+        return UrlPlaybackKind.videoPreferred;
+      case 'web':
+        return UrlPlaybackKind.webPreferred;
+      default:
+        return UrlPlaybackKind.unknown;
+    }
+  }
+
+  String get wireValue => switch (this) {
+        UrlPlaybackKind.videoPreferred => 'video',
+        UrlPlaybackKind.webPreferred => 'web',
+        UrlPlaybackKind.unknown => 'unknown',
+      };
+}
+
 /// Playlist entry from `GET /api/devices/:id/playlist`.
 class PlaylistItem {
   const PlaylistItem({
@@ -34,6 +57,7 @@ class PlaylistItem {
     this.muted = false,
     this.transition = 'fade',
     this.fitMode = 'fill',
+    this.urlPlaybackKind = UrlPlaybackKind.unknown,
   });
 
   final String id;
@@ -50,6 +74,7 @@ class PlaylistItem {
 
   /// CMS fit mode: `fill` (cover), `fit` (contain), `stretch`.
   final String fitMode;
+  final UrlPlaybackKind urlPlaybackKind;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -60,6 +85,7 @@ class PlaylistItem {
         'muted': muted,
         'transition': transition,
         'fitMode': fitMode,
+        'urlPlaybackKind': urlPlaybackKind.wireValue,
       };
 
   factory PlaylistItem.fromJson(Map<String, dynamic> json) {
@@ -72,6 +98,8 @@ class PlaylistItem {
       muted: json['muted'] as bool? ?? false,
       transition: (json['transition'] as String?)?.toLowerCase() ?? 'fade',
       fitMode: (json['fitMode'] as String?)?.toLowerCase() ?? 'fill',
+      urlPlaybackKind:
+          UrlPlaybackKind.parse(json['urlPlaybackKind'] as String?),
     );
   }
 }

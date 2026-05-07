@@ -23,7 +23,9 @@ class PairingController extends ChangeNotifier {
   final PairingApi _pairingApi;
   final TokenStore _tokenStore;
   final DeviceFingerprintService _fingerprintService;
-  static const Duration _pairingTimeout = Duration(seconds: 20);
+  // Keep this aligned with Dio receive timeout to avoid premature UI errors
+  // while the request is still in-flight on slower LAN/dev setups.
+  static const Duration _pairingTimeout = Duration(seconds: 90);
 
   PairingPhase phase = PairingPhase.idle;
   String? errorMessage;
@@ -32,6 +34,7 @@ class PairingController extends ChangeNotifier {
   Future<void> submit({
     required String rawLicenseId,
     required String rawDeviceName,
+    String? rawOrgEnrollmentCode,
   }) async {
     if (phase == PairingPhase.loading) return;
     phase = PairingPhase.loading;
@@ -45,6 +48,7 @@ class PairingController extends ChangeNotifier {
             licenseId: rawLicenseId,
             deviceName: rawDeviceName,
             fingerprint: fingerprint,
+            orgEnrollmentCode: rawOrgEnrollmentCode,
           )
           .timeout(_pairingTimeout);
       await _tokenStore.saveSession(
@@ -53,6 +57,7 @@ class PairingController extends ChangeNotifier {
       await _tokenStore.saveLicenseContext(
         licenseId: rawLicenseId,
         deviceName: rawDeviceName,
+        orgEnrollmentCode: rawOrgEnrollmentCode,
       );
       await _tokenStore.savePairedDevice(result.identity);
       lastPaired = result.identity;
@@ -65,7 +70,7 @@ class PairingController extends ChangeNotifier {
     } on TimeoutException {
       phase = PairingPhase.error;
       errorMessage =
-          'Pairing timed out. Check API base URL/network and try again.';
+          'Pairing request timed out. Check API base URL/network and try again.';
       notifyListeners();
     } catch (e, st) {
       if (kDebugMode) {
@@ -82,11 +87,28 @@ class PairingController extends ChangeNotifier {
     final deviceName = _tokenStore.savedDeviceName;
     if (licenseId == null || deviceName == null) return;
     if (phase == PairingPhase.loading) return;
-    await submit(rawLicenseId: licenseId, rawDeviceName: deviceName);
+    await submit(
+      rawLicenseId: licenseId,
+      rawDeviceName: deviceName,
+      rawOrgEnrollmentCode: null,
+    );
   }
 
   Future<void> recoverFromFingerprint() async {
     if (phase == PairingPhase.loading) return;
+    // Guard: never call the fingerprint-only register endpoint on a truly
+    // fresh install. Without this, a new APK could match a colliding
+    // fingerprint on the server and inherit another device's identity.
+    final hasPriorContext =
+        _tokenStore.savedLicenseId != null ||
+        _tokenStore.savedDeviceName != null ||
+        _tokenStore.loadPairedDevice() != null;
+    if (!hasPriorContext) {
+      phase = PairingPhase.idle;
+      errorMessage = null;
+      notifyListeners();
+      return;
+    }
     phase = PairingPhase.loading;
     errorMessage = null;
     notifyListeners();

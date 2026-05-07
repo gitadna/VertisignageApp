@@ -57,15 +57,21 @@ class ImageSlideLayer extends StatelessWidget {
 class VideoSlideLayer extends StatefulWidget {
   const VideoSlideLayer({
     super.key,
-    required this.path,
+    this.path,
+    this.networkUri,
     required this.fit,
     required this.muted,
     required this.generation,
     required this.onEnded,
     this.playbackPaused,
-  });
+  }) : assert(
+         (path != null && networkUri == null) ||
+             (path == null && networkUri != null),
+         'Provide exactly one of path or networkUri.',
+       );
 
-  final String path;
+  final String? path;
+  final Uri? networkUri;
   final BoxFit fit;
   final bool muted;
   final int generation;
@@ -167,18 +173,17 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
   }
 
   Future<void> _init() async {
-    _log('init start path=${widget.path}');
-    final c = VideoPlayerController.file(File(widget.path));
+    _log('init start source=${widget.path ?? widget.networkUri}');
+    final c = widget.path != null
+        ? VideoPlayerController.file(File(widget.path!))
+        : VideoPlayerController.networkUrl(widget.networkUri!);
     try {
       await c.initialize();
       if (!mounted) {
         await c.dispose();
         return;
       }
-      // Playlist video timing is controlled by PlayerController dwell timers.
-      // Keep decoder looping so bogus metadata durations (e.g. 1ms) do not
-      // trigger immediate slide churn on some Android codecs.
-      await c.setLooping(true);
+      await c.setLooping(false);
       await c.setVolume(widget.muted ? 0 : 1);
       _controller = c;
       c.addListener(_onTick);
@@ -215,8 +220,15 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
       _log('first frame at ${v.position.inMilliseconds}ms');
     }
 
-    // Do not auto-finish on "natural end" here. Playlist dwell timers decide
-    // when to switch slides, and looping avoids codec metadata edge-cases.
+    final elapsedEnough = _playStartedAt != null &&
+        DateTime.now().difference(_playStartedAt!) >= _minPlaybackBeforeEnd;
+    final nearEnd = v.position >= (v.duration - _endEpsilon);
+    if (elapsedEnough && nearEnd) {
+      _log(
+        'natural end reached position=${v.position.inMilliseconds} duration=${v.duration.inMilliseconds}',
+      );
+      _finish(hadError: false);
+    }
   }
 
   Future<void> _retryOrFinishOnError() async {

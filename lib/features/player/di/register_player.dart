@@ -62,6 +62,7 @@ void registerPlayerModule(GetIt getIt) {
       cache: getIt<MediaCacheService>(),
       tokenStore: getIt<TokenStore>(),
       heartbeat: getIt<DeviceHeartbeatService>(),
+      device: getIt<DeviceService>(),
       telemetry: getIt<PlayerTelemetry>(),
     ),
   );
@@ -82,7 +83,10 @@ void registerPlayerModule(GetIt getIt) {
   );
 
   getIt.registerLazySingleton<ConnectivityCoordinator>(
-    () => ConnectivityCoordinator(getIt<PlaylistSyncService>()),
+    () => ConnectivityCoordinator(
+      getIt<PlaylistSyncService>(),
+      getIt<DeviceService>(),
+    ),
   );
 
   getIt.registerLazySingleton<RealtimeDispatcher>(

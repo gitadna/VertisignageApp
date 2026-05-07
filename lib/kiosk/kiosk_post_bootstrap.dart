@@ -46,6 +46,10 @@ abstract final class KioskPostBootstrap {
     }
     _configured = true;
     sl<KioskRecoveryStore>().restoreGateFromDisk();
+    final crashMarker = await sl<DeviceService>().consumeNativeCrashMarker();
+    if (crashMarker['crashed'] == true) {
+      await sl<KioskRecoveryStore>().recordCrashMarker();
+    }
     await sl<RemoteLogUploader>().restoreFromDisk();
     KioskLog.bindRemoteSink(sl<RemoteLogUploader>().enqueue);
     GlobalErrorHandler.install();

@@ -46,6 +46,11 @@
             </intent-filter>
         </receiver>
         <receiver
+            android:name=".RecoveryAlarmReceiver"
+            android:enabled="true"
+            android:exported="false"
+            android:directBootAware="true" />
+        <receiver
             android:name=".VertiDeviceAdminReceiver"
             android:permission="android.permission.BIND_DEVICE_ADMIN"
             android:exported="true">

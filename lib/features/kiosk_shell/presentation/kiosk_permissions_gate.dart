@@ -38,6 +38,10 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   bool _bootRecoveryPending = false;
   String? _bootRecoveryReason;
   bool _firstLaunchCompleted = true;
+  bool _showBackgroundRestartPrompt = false;
+  bool _backgroundRestartEnabled = false;
+  bool _oemBackgroundLaunchConfirmed = false;
+  bool _recentsLockConfirmed = false;
 
   bool get _notificationsApplicable =>
       Platform.isAndroid && _androidSdk >= 33;
@@ -152,7 +156,9 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
     setState(() {
       _bootRecoveryPending = false;
       _bootRecoveryReason = null;
+      _showBackgroundRestartPrompt = true;
     });
+    _showBackgroundRestartNeededPopup();
   }
 
   Future<String> _getPackageName() async {
@@ -161,6 +167,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   }
 
   Future<void> _refreshPermissionState({bool skipSetState = false}) async {
+    final owner = await _device.isDeviceOwner();
     final overlay = await Permission.systemAlertWindow.isGranted;
     final battery = await Permission.ignoreBatteryOptimizations.isGranted;
     bool notification = true;
@@ -172,6 +179,8 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
       _overlayOk = overlay;
       _batteryOk = battery;
       _notificationOk = notification;
+      _deviceOwner = owner;
+      _overlayRequiredForContinue = !_deviceOwner;
     }
 
     if (skipSetState) {
@@ -192,8 +201,65 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   Future<void> _onContinue() async {
     await _refreshPermissionState();
     if (_canContinue) {
+      if (!_oemBackgroundLaunchConfirmed || !_recentsLockConfirmed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Recommended: confirm OEM auto-start and lock app in recents for best reliability.',
+            ),
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+      if (!_backgroundRestartEnabled) {
+        _showBackgroundRestartNeededPopup();
+      }
       await _markComplete();
       setState(() => _needsSetup = false);
+    }
+  }
+
+  void _showBackgroundRestartNeededPopup() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Enable auto-start for admin restart.',
+        ),
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
+  Future<void> _enableBackgroundRestartSupport() async {
+    await _openAutoStartSettings();
+    if (!mounted) return;
+    final enabled = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Background restart support'),
+        content: const Text(
+          'Turn on auto-start, then tap Enabled.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Enabled'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      _backgroundRestartEnabled = enabled == true;
+      _showBackgroundRestartPrompt = enabled != true;
+    });
+    if (enabled != true) {
+      _showBackgroundRestartNeededPopup();
     }
   }
 
@@ -220,6 +286,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   }
 
   Future<void> _requestBattery() async {
+    await _device.openBatteryOptimizationSettings();
     await Permission.ignoreBatteryOptimizations.request();
     await _refreshPermissionState();
   }
@@ -247,8 +314,8 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
         ? 'Display over other apps'
         : 'Display over other apps (recommended)';
     final overlaySubtitle = _overlayRequiredForContinue
-        ? 'Required on this device for native Show on screen and overlay takeover when VertiSignage is not the device-owner kiosk.'
-        : 'Managed kiosk mode reduces restrictions; granting this still helps admin Show on screen and overlay announcements if playback leaves lock task.';
+        ? 'Required for Show on screen and takeover.'
+        : 'Recommended for Show on screen and takeover.';
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -262,7 +329,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'Permissions for playback & remote control',
+                        'Permissions',
                         style: theme.textTheme.headlineSmall,
                       ),
                       if (_bootRecoveryPending) ...[
@@ -283,8 +350,8 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                                 const SizedBox(height: 6),
                                 Text(
                                   _firstLaunchCompleted
-                                      ? 'Android reported a reboot/update event; background recovery is attempting to restart the kiosk foreground service.'
-                                      : 'This device rebooted or updated before the first app launch. Android does not allow safe auto-start until you open the app once.',
+                                      ? 'Reboot/update detected. Recovery is trying to restart kiosk service.'
+                                      : 'Open the app once after reboot/update to allow safe auto-start.',
                                   style: theme.textTheme.bodyMedium,
                                 ),
                                 if (_bootRecoveryReason != null) ...[
@@ -307,15 +374,56 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                           ),
                         ),
                       ],
+                      if (!_bootRecoveryPending &&
+                          _showBackgroundRestartPrompt &&
+                          !_backgroundRestartEnabled) ...[
+                        const SizedBox(height: 12),
+                        Card(
+                          margin: EdgeInsets.zero,
+                          color: theme.colorScheme.surfaceContainerHighest
+                              .withValues(alpha: 0.35),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Text(
+                                  'Enable auto-start',
+                                  style: theme.textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Needed for reliable admin restart/takeover after reboot or update.',
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                                const SizedBox(height: 12),
+                                OutlinedButton(
+                                  onPressed: _enableBackgroundRestartSupport,
+                                  child: const Text('Enable now'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       Text(
-                        'Grant these so realtime playlist updates work, admin Take over can bring VertiSignage to the foreground, and Show on screen behaves reliably.',
+                        'Grant these for reliable remote control.',
                         style: theme.textTheme.bodyLarge,
                       ),
                       if (_deviceOwner) ...[
                         const SizedBox(height: 8),
                         Text(
-                          'This device is enrolled as device-owner kiosk; fewer limits apply, but battery and notifications below still matter.',
+                          'Device Owner is active. Battery and notifications still matter.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                      if (!_deviceOwner) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Device Owner is recommended for better kiosk stability.',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
@@ -333,7 +441,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                       _PermissionRow(
                         title: 'Do not optimize battery',
                         subtitle:
-                            'Reduces Android suspending the app so WebSocket commands (Take over, volume, sync) still arrive.',
+                            'Helps keep the app alive for remote commands.',
                         ok: _batteryOk,
                         requiredForContinue: true,
                         onRequest: _requestBattery,
@@ -343,7 +451,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                         _PermissionRow(
                           title: 'Notifications',
                           subtitle:
-                              'Android 13+ requires this for the playback foreground notification; tapping it helps return to the app when it is not visible.',
+                              'Required on Android 13+ for foreground playback service.',
                           ok: _notificationOk,
                           requiredForContinue: true,
                           requestButtonLabel: 'Allow notifications',
@@ -353,6 +461,17 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                       const SizedBox(height: 16),
                       _AutoStartTipCard(
                         onOpenSettings: _openAutoStartSettings,
+                        oemBackgroundLaunchConfirmed:
+                            _oemBackgroundLaunchConfirmed,
+                        recentsLockConfirmed: _recentsLockConfirmed,
+                        onToggleOemBackgroundLaunch: (value) {
+                          setState(
+                            () => _oemBackgroundLaunchConfirmed = value,
+                          );
+                        },
+                        onToggleRecentsLock: (value) {
+                          setState(() => _recentsLockConfirmed = value);
+                        },
                       ),
                       const SizedBox(height: 24),
                     ],
@@ -442,9 +561,19 @@ class _PermissionRow extends StatelessWidget {
 }
 
 class _AutoStartTipCard extends StatelessWidget {
-  const _AutoStartTipCard({required this.onOpenSettings});
+  const _AutoStartTipCard({
+    required this.onOpenSettings,
+    required this.oemBackgroundLaunchConfirmed,
+    required this.recentsLockConfirmed,
+    required this.onToggleOemBackgroundLaunch,
+    required this.onToggleRecentsLock,
+  });
 
   final VoidCallback onOpenSettings;
+  final bool oemBackgroundLaunchConfirmed;
+  final bool recentsLockConfirmed;
+  final ValueChanged<bool> onToggleOemBackgroundLaunch;
+  final ValueChanged<bool> onToggleRecentsLock;
 
   @override
   Widget build(BuildContext context) {
@@ -463,13 +592,30 @@ class _AutoStartTipCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Recommended — does not block Continue. On Xiaomi, Oppo, Vivo, OnePlus, Samsung and similar builds, admin Take over can fail if background activity or auto-start is restricted. Note: if the user force-stops the app, Android will block auto-start until the app is opened manually.',
+              'Recommended. Some phones block admin takeover/restart without this.',
               style: theme.textTheme.bodyMedium,
             ),
             const SizedBox(height: 12),
             OutlinedButton(
               onPressed: onOpenSettings,
               child: const Text('Open OEM settings'),
+            ),
+            const SizedBox(height: 12),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: oemBackgroundLaunchConfirmed,
+              onChanged: (value) => onToggleOemBackgroundLaunch(value ?? false),
+              title: const Text('OEM auto-start / background launch enabled'),
+              subtitle: const Text('Required on many phones for reboot recovery.'),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: recentsLockConfirmed,
+              onChanged: (value) => onToggleRecentsLock(value ?? false),
+              title: const Text('App locked in recents (if OEM supports it)'),
+              subtitle: const Text(
+                'Helps prevent aggressive cleanup from recents manager.',
+              ),
             ),
           ],
         ),

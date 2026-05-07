@@ -35,4 +35,14 @@ abstract final class StorageKeys {
 
   /// `'1'` once Android overlay + battery onboarding finished ([KioskPermissionsGate]).
   static const String kioskPowerSetupComplete = 'kiosk_power_setup_complete';
+
+  /// Per-install UUID written once on first fingerprint compute; survives reinstall only via secure storage.
+  static const String installUuid = 'install_uuid';
+
+  /// Cached SHA-256 fingerprint string computed from install UUID + Android device info.
+  static const String deviceFingerprint = 'device_fingerprint';
+
+  /// Org-level enrollment code last entered on the pairing screen; reused on
+  /// recovery so a re-launch never has to re-enter it.
+  static const String orgEnrollmentCode = 'org_enrollment_code';
 }

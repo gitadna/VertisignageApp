@@ -15,6 +15,7 @@ class RecoveryWorker(
     override suspend fun doWork(): Result {
         val reason = inputData.getString(KEY_REASON) ?: "unknown"
         log("worker_run", "begin reason=$reason")
+        WatchdogState.markServiceHeartbeat(applicationContext)
 
         val storageContext =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N)
@@ -33,11 +34,23 @@ class RecoveryWorker(
         }
 
         try {
+            val nowMs = System.currentTimeMillis()
+            val serviceStale = nowMs - WatchdogState.lastServiceHeartbeatMs(applicationContext) > SERVICE_STALE_MS
+            val uiStale = nowMs - WatchdogState.lastUiHeartbeatMs(applicationContext) > UI_STALE_MS
             val serviceIntent = Intent(applicationContext, KioskForegroundService::class.java).apply {
                 putExtra(BootReceiver.EXTRA_START_SOURCE, START_SOURCE_WORKER)
                 putExtra(EXTRA_RECOVERY_REASON, reason)
+                putExtra(EXTRA_FORCE_WAKE_UI, serviceStale || uiStale)
             }
             ContextCompat.startForegroundService(applicationContext, serviceIntent)
+            if (serviceStale || uiStale) {
+                val wakeOk = CommandRelay.wakeApp(applicationContext)
+                if (!wakeOk) {
+                    RecoveryScheduler.scheduleAlarmFallback(applicationContext, "worker_wake_failed:$reason", 15_000L)
+                }
+                log("worker_watchdog_recovery", "serviceStale=$serviceStale uiStale=$uiStale reason=$reason")
+            }
+            RecoveryScheduler.scheduleAlarmFallback(applicationContext, "worker:$reason", 120_000L)
             log("worker_start_fgs", "requested reason=$reason")
         } catch (t: Throwable) {
             prefs.edit()
@@ -76,6 +89,9 @@ class RecoveryWorker(
 
         private const val START_SOURCE_WORKER = "workmanager"
         const val EXTRA_RECOVERY_REASON = "extra_recovery_reason"
+        const val EXTRA_FORCE_WAKE_UI = "extra_force_wake_ui"
+        private const val SERVICE_STALE_MS = 4 * 60_000L
+        private const val UI_STALE_MS = 3 * 60_000L
     }
 }
 

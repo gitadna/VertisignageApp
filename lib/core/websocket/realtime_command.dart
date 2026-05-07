@@ -6,13 +6,27 @@ sealed class RealtimeCommand {
 }
 
 class PlaylistUpdatedCommand extends RealtimeCommand {
-  const PlaylistUpdatedCommand({this.playlistId});
+  const PlaylistUpdatedCommand({
+    this.playlistId,
+    this.forceImmediate = false,
+    this.reason,
+  });
 
   final String? playlistId;
+
+  /// When true, the kiosk should swap to the freshly fetched playlist immediately, bypassing the
+  /// normal slide-boundary commit. Set by the backend on content replacement / schedule edits so
+  /// long videos do not delay live changes by their full duration.
+  final bool forceImmediate;
+
+  final String? reason;
 }
 
 class SyncRequestCommand extends RealtimeCommand {
-  const SyncRequestCommand();
+  const SyncRequestCommand({this.forceImmediate = false, this.reason});
+
+  final bool forceImmediate;
+  final String? reason;
 }
 
 class EmergencyAlertCommand extends RealtimeCommand {
@@ -122,6 +136,7 @@ class OverlayShowCommand extends RealtimeCommand {
     this.commandType,
     this.contentType,
     this.createdAt,
+    this.resumePreviousPlayback = false,
   });
 
   final String messageId;
@@ -134,6 +149,7 @@ class OverlayShowCommand extends RealtimeCommand {
   final String? commandType;
   final String? contentType;
   final DateTime? createdAt;
+  final bool resumePreviousPlayback;
 }
 
 class OverlayHideCommand extends RealtimeCommand {
@@ -158,6 +174,7 @@ class AnnouncementCommand extends RealtimeCommand {
     this.createdAt,
     this.scheduleEndsAtUtc,
     this.pushedAtUtc,
+    this.resumePreviousPlayback = false,
   });
 
   final String announcementId;
@@ -177,6 +194,7 @@ class AnnouncementCommand extends RealtimeCommand {
   final DateTime? scheduleEndsAtUtc;
   /// Last push time from server — used for overlap resolution (latest wins).
   final DateTime? pushedAtUtc;
+  final bool resumePreviousPlayback;
 }
 
 class AnnouncementTransportCommand extends RealtimeCommand {
@@ -290,12 +308,20 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
     switch (type) {
       case 'PLAYLIST_UPDATED':
         final m = payload is Map<String, dynamic> ? payload : null;
+        final force = m?['forceImmediate'];
         return PlaylistUpdatedCommand(
           playlistId: m?['playlistId'] as String?,
+          forceImmediate: force is bool ? force : force == true,
+          reason: m?['reason'] as String?,
         );
       case 'SYNC_REQUEST':
       case 'SCHEDULE_UPDATED':
-        return const SyncRequestCommand();
+        final m = payload is Map<String, dynamic> ? payload : null;
+        final force = m?['forceImmediate'];
+        return SyncRequestCommand(
+          forceImmediate: force is bool ? force : true,
+          reason: m?['reason'] as String?,
+        );
       case 'EMERGENCY_ALERT':
         if (payload is! Map<String, dynamic>) return null;
         final aid = payload['alertId'] as String?;
@@ -401,6 +427,7 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final opacityRaw = payload['opacity'];
         final opacity = opacityRaw is num ? opacityRaw.toDouble() : 0.9;
         final createdAtRaw = payload['createdAt'] as String?;
+        final resumePreviousPlayback = payload['resumePreviousPlayback'] == true;
         return OverlayShowCommand(
           messageId: mid,
           text: text,
@@ -412,6 +439,7 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
           commandType: payload['commandType'] as String?,
           contentType: payload['contentType'] as String?,
           createdAt: createdAtRaw != null ? DateTime.tryParse(createdAtRaw) : null,
+          resumePreviousPlayback: resumePreviousPlayback,
         );
       case 'OVERLAY_HIDE':
         if (payload is! Map<String, dynamic>) return null;
@@ -434,6 +462,7 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final createdAtRaw = payload['createdAt'] as String?;
         final scheduleEndsRaw = payload['scheduleEndsAt'] as String?;
         final pushedAtRaw = payload['pushedAt'] as String?;
+        final resumePreviousPlayback = payload['resumePreviousPlayback'] == true;
         return AnnouncementCommand(
           announcementId: aid,
           title: (title == null || title.isEmpty) ? 'Announcement' : title,
@@ -449,6 +478,7 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
           scheduleEndsAtUtc:
               scheduleEndsRaw != null ? DateTime.tryParse(scheduleEndsRaw)?.toUtc() : null,
           pushedAtUtc: pushedAtRaw != null ? DateTime.tryParse(pushedAtRaw)?.toUtc() : null,
+          resumePreviousPlayback: resumePreviousPlayback,
         );
       case 'ANNOUNCEMENT_TRANSPORT':
         if (payload is! Map<String, dynamic>) return null;

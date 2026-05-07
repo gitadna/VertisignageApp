@@ -71,6 +71,21 @@ class DeviceService {
     }
   }
 
+  Future<Map<String, dynamic>> consumeNativeCrashMarker() async {
+    if (!Platform.isAndroid) {
+      return <String, dynamic>{'crashed': false, 'atMs': 0, 'reason': null};
+    }
+    try {
+      final m = await _device.invokeMethod<dynamic>('consumeNativeCrashMarker');
+      if (m is Map) {
+        return Map<String, dynamic>.from(m);
+      }
+    } catch (e, st) {
+      KioskLog.e('DeviceService.consumeNativeCrashMarker', e, st);
+    }
+    return <String, dynamic>{'crashed': false, 'atMs': 0, 'reason': null};
+  }
+
   /// Explicitly kick native recovery scheduling (safe to call on resume).
   Future<void> recoveryEnqueueNow(String reason) async {
     if (!Platform.isAndroid) return;

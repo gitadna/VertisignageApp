@@ -136,6 +136,7 @@ class TokenStore extends ChangeNotifier implements TokenReader {
   Future<void> saveLicenseContext({
     required String licenseId,
     required String deviceName,
+    String? orgEnrollmentCode,
   }) async {
     await _storage.setString(
       StorageKeys.deviceBox,
@@ -149,6 +150,27 @@ class TokenStore extends ChangeNotifier implements TokenReader {
       deviceName.trim(),
     );
     await _writeSecure(StorageKeys.deviceName, deviceName.trim());
+    if (orgEnrollmentCode != null && orgEnrollmentCode.trim().isNotEmpty) {
+      final code = orgEnrollmentCode.trim().toUpperCase();
+      await _storage.setString(
+        StorageKeys.deviceBox,
+        StorageKeys.orgEnrollmentCode,
+        code,
+      );
+      await _writeSecure(StorageKeys.orgEnrollmentCode, code);
+    } else {
+      await _storage.remove(StorageKeys.deviceBox, StorageKeys.orgEnrollmentCode);
+      await _writeSecure(StorageKeys.orgEnrollmentCode, null);
+    }
+  }
+
+  String? get savedOrgEnrollmentCode {
+    final raw = _storage.getString(
+      StorageKeys.deviceBox,
+      StorageKeys.orgEnrollmentCode,
+    );
+    if (raw == null || raw.trim().isEmpty) return null;
+    return raw.trim().toUpperCase();
   }
 
   String? get savedLicenseId {
