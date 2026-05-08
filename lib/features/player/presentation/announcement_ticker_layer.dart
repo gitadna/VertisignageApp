@@ -15,6 +15,11 @@ class AnnouncementTickerLayer extends StatelessWidget {
         if (!n.isActive || n.mode != AnnouncementRenderMode.ticker) {
           return const SizedBox.shrink();
         }
+        final bodyTrimmed = n.body?.trim() ?? '';
+        final titleTrimmed = n.title.trim();
+        final tickerText = bodyTrimmed.isNotEmpty
+            ? bodyTrimmed
+            : (titleTrimmed.isNotEmpty ? titleTrimmed : 'Announcement');
         return Align(
           alignment: Alignment.topCenter,
           child: SafeArea(
@@ -31,7 +36,7 @@ class AnnouncementTickerLayer extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      [n.title, n.body].whereType<String>().where((t) => t.trim().isNotEmpty).join(' — '),
+                      tickerText,
                       style: const TextStyle(color: Colors.white, fontSize: 14),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,

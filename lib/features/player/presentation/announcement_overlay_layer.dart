@@ -7,7 +7,7 @@ import '../../../core/di/injection.dart';
 import '../data/announcement_overlay_notifier.dart';
 import 'playback_layers.dart';
 
-/// Full-screen announcement media only (no titles or footer chrome).
+/// Full-screen announcement media with optional announcement-text caption below.
 class AnnouncementOverlayLayer extends StatelessWidget {
   const AnnouncementOverlayLayer({super.key});
 
@@ -168,6 +168,56 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     super.dispose();
   }
 
+  /// On-screen message body only (never duplicates admin title under media).
+  String? _bodyCaption() {
+    final b = widget.body?.trim();
+    if (b == null || b.isEmpty) return null;
+    return b;
+  }
+
+  String _primaryFallbackMessage() {
+    final b = widget.body?.trim();
+    if (b != null && b.isNotEmpty) return b;
+    final t = widget.title.trim();
+    if (t.isNotEmpty) return t;
+    return 'Announcement';
+  }
+
+  Widget _captionStrip() {
+    final caption = _bodyCaption();
+    if (caption == null) return const SizedBox.shrink();
+    return Material(
+      color: Colors.black.withValues(alpha: 0.88),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+        child: Text(
+          caption,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.w600,
+            height: 1.3,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _mediaColumn(Widget expandedMediaChild) {
+    final caption = _bodyCaption();
+    return ColoredBox(
+      color: Colors.black,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: expandedMediaChild),
+          if (caption != null) _captionStrip(),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final url = widget.url;
@@ -184,9 +234,9 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         if (w <= 0 || h <= 0) {
           return _buildTextFallback();
         }
-        return ColoredBox(
-          color: Colors.black,
-          child: SizedBox.expand(
+        return _mediaColumn(
+          ColoredBox(
+            color: Colors.black,
             child: FittedBox(
               fit: BoxFit.cover,
               alignment: Alignment.center,
@@ -199,16 +249,18 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
           ),
         );
       }
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          const ColoredBox(color: Colors.black),
-          Center(
-            child: CircularProgressIndicator(
-              color: Theme.of(context).colorScheme.primary,
+      return _mediaColumn(
+        Stack(
+          fit: StackFit.expand,
+          children: [
+            const ColoredBox(color: Colors.black),
+            Center(
+              child: CircularProgressIndicator(
+                color: Theme.of(context).colorScheme.primary,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     }
     if (widget.kind == AnnouncementMediaKind.video &&
@@ -222,22 +274,24 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         url != null &&
         url.isNotEmpty) {
       final effectiveUrl = _effectiveUrl(url);
-      return ColoredBox(
-        color: Colors.black,
-        child: SizedBox.expand(
-          child: Image.network(
-            effectiveUrl,
-            fit: BoxFit.cover,
-            alignment: Alignment.center,
-            errorBuilder: (_, _, _) => _buildTextFallback(),
-            loadingBuilder: (ctx, child, progress) {
-              if (progress == null) return child;
-              return Center(
-                child: CircularProgressIndicator(
-                  color: Theme.of(ctx).colorScheme.primary,
-                ),
-              );
-            },
+      return _mediaColumn(
+        ColoredBox(
+          color: Colors.black,
+          child: SizedBox.expand(
+            child: Image.network(
+              effectiveUrl,
+              fit: BoxFit.cover,
+              alignment: Alignment.center,
+              errorBuilder: (_, _, _) => _buildTextFallback(),
+              loadingBuilder: (ctx, child, progress) {
+                if (progress == null) return child;
+                return Center(
+                  child: CircularProgressIndicator(
+                    color: Theme.of(ctx).colorScheme.primary,
+                  ),
+                );
+              },
+            ),
           ),
         ),
       );
@@ -251,15 +305,17 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
       if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
         return _buildTextFallback();
       }
-      return ColoredBox(
-        color: Colors.black,
-        child: WebSlideLayer(
-          uri: uri,
-          onLoadSuccess: () {},
-          onLoadFailed: () {
-            if (!mounted) return;
-            setState(() => _webFailed = true);
-          },
+      return _mediaColumn(
+        ColoredBox(
+          color: Colors.black,
+          child: WebSlideLayer(
+            uri: uri,
+            onLoadSuccess: () {},
+            onLoadFailed: () {
+              if (!mounted) return;
+              setState(() => _webFailed = true);
+            },
+          ),
         ),
       );
     }
@@ -268,17 +324,14 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
   }
 
   Widget _buildTextFallback() {
-    final message = [
-      widget.title.trim(),
-      widget.body?.trim() ?? '',
-    ].where((e) => e.isNotEmpty).join('\n\n');
+    final message = _primaryFallbackMessage();
     return ColoredBox(
       color: Colors.black,
       child: Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
           child: Text(
-            message.isNotEmpty ? message : 'Announcement',
+            message,
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: Colors.white,

@@ -48,7 +48,7 @@ class VoiceBroadcastCoordinator {
       await _leaveAndRestoreApp();
       KioskLog.event('voice_signal', 'voice_stream_stopped');
     });
-    _fallbackPollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+    _fallbackPollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       await _fallbackJoinFromActiveStream(source: 'periodic_poll');
     });
     _sync();

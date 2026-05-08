@@ -407,7 +407,7 @@ class RealtimeDispatcher {
           'takeover',
           'announcement_takeover_path',
           level: 'info',
-          detail: takeover,
+          meta: takeover,
         );
       }
 

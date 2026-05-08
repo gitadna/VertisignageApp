@@ -55,13 +55,25 @@ class VoiceBroadcastPlayer {
     );
   }
 
+  /// Drops any existing LiveKit room without hiding the takeover UI.
+  /// Used when switching sessions or reconnecting so users don't see a blank gap during connect.
+  Future<void> _disposeRoomOnly() async {
+    final room = _room;
+    _room = null;
+    await _roomEventsCancel?.call();
+    _roomEventsCancel = null;
+    if (room != null) {
+      await room.disconnect();
+    }
+  }
+
   Future<void> join({
     required String streamSessionId,
     required String livekitUrl,
     required String token,
   }) async {
     if (_activeSessionId == streamSessionId && _room != null) return;
-    await leave();
+    await _disposeRoomOnly();
     // Prefer loudspeaker for takeover-style voice announcements.
     try {
       await Hardware.instance.setSpeakerphoneOn(true);
@@ -117,15 +129,9 @@ class VoiceBroadcastPlayer {
   }
 
   Future<void> leave() async {
-    final room = _room;
-    _room = null;
-    await _roomEventsCancel?.call();
-    _roomEventsCancel = null;
+    await _disposeRoomOnly();
     _activeSessionId = null;
     _playerController.endAnnouncementHold();
     takeoverState.value = VoiceTakeoverUiState.hidden;
-    if (room != null) {
-      await room.disconnect();
-    }
   }
 }

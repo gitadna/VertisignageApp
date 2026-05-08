@@ -144,6 +144,8 @@ object VertiPushCommandHandler {
         }
 
         val title = payload.optString("title", "Announcement").ifBlank { "Announcement" }
+        val body = payload.optString("body").trim().ifBlank { null }
+        val overlayText = body ?: title
         val durationSec = payload.optInt("durationSec", 15).coerceIn(3, 600)
         val untilDismissed = payload.optBoolean("untilDismissed", false)
         val scheduleEndsRaw = payload.optString("scheduleEndsAt").trim().ifBlank { null }
@@ -168,7 +170,7 @@ object VertiPushCommandHandler {
             val shown =
                 CommandRelay.showOverlay(
                 context = context,
-                text = title,
+                text = overlayText,
                 mediaUrl = mediaUrl,
                 mediaKind = mediaKind,
                 untilDismissed = untilDismissed,
