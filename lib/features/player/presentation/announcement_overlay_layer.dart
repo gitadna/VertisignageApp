@@ -187,7 +187,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     final caption = _bodyCaption();
     if (caption == null) return const SizedBox.shrink();
     return Material(
-      color: Colors.black.withValues(alpha: 0.88),
+      color: Colors.black,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
         child: Text(
@@ -238,7 +238,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
           ColoredBox(
             color: Colors.black,
             child: FittedBox(
-              fit: BoxFit.cover,
+              fit: BoxFit.contain,
               alignment: Alignment.center,
               child: SizedBox(
                 width: w,
@@ -280,7 +280,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
           child: SizedBox.expand(
             child: Image.network(
               effectiveUrl,
-              fit: BoxFit.cover,
+              fit: BoxFit.contain,
               alignment: Alignment.center,
               errorBuilder: (_, _, _) => _buildTextFallback(),
               loadingBuilder: (ctx, child, progress) {

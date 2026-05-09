@@ -21,11 +21,23 @@ abstract final class StorageKeys {
   /// ISO timestamps of recent fatal reports (for safe mode).
   static const String fatalCrashLogJson = 'fatal_crash_log_json';
 
+  /// JSON array of recent crash marker entries with `{ atUtc, sig, source }`.
+  static const String fatalCrashMarkersJson = 'fatal_crash_markers_json';
+
+  /// Last reason string captured when safe mode was entered.
+  static const String safeModeReason = 'safe_mode_reason';
+
   /// When true, UI stays in minimal recovery mode until cleared.
   static const String safeMode = 'safe_mode';
 
   /// JSON map of cache file path → last-access epoch ms (media LRU).
   static const String mediaCacheLruJson = 'media_cache_lru_json';
+
+  /// Approximate total bytes tracked for `media_cache/` (fast cache-size reporting).
+  static const String mediaCacheTrackedTotalBytes = 'media_cache_tracked_total_bytes';
+
+  /// Last successful reconciliation timestamp for media cache ledger (UTC ISO).
+  static const String mediaCacheLedgerReconciledAtUtc = 'media_cache_ledger_reconciled_at_utc';
 
   /// JSON array of pending structured log entries (offline / retry).
   static const String remoteLogQueueJson = 'remote_log_queue_json';

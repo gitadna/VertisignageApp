@@ -593,7 +593,7 @@ class _PlaylistIdleOverlay extends StatelessWidget {
     }
 
     return Material(
-      color: Colors.black.withValues(alpha: 0.94),
+      color: Colors.black,
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),

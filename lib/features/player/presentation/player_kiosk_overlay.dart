@@ -42,7 +42,7 @@ class PlayerKioskOverlay extends StatelessWidget {
           AppSpacing.s4,
         ),
         child: Material(
-          color: Colors.black.withValues(alpha: 0.45),
+          color: Colors.black,
           borderRadius: BorderRadius.circular(AppSpacing.s3),
           clipBehavior: Clip.antiAlias,
           child: InkWell(

@@ -20,29 +20,42 @@ class AnnouncementTickerLayer extends StatelessWidget {
         final tickerText = bodyTrimmed.isNotEmpty
             ? bodyTrimmed
             : (titleTrimmed.isNotEmpty ? titleTrimmed : 'Announcement');
-        return Align(
-          alignment: Alignment.topCenter,
-          child: SafeArea(
-            child: Container(
-              margin: const EdgeInsets.all(12),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.78),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.campaign_outlined, color: Colors.white70, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      tickerText,
-                      style: const TextStyle(color: Colors.white, fontSize: 14),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+        return Positioned.fill(
+          child: ColoredBox(
+            color: Colors.black,
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: SafeArea(
+                child: Container(
+                  margin: const EdgeInsets.all(12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                ],
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.campaign_outlined,
+                        color: Colors.white70,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          tickerText,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),

@@ -24,7 +24,7 @@ class EmergencyOverlayLayer extends StatelessWidget {
 
         return Positioned.fill(
           child: Material(
-            color: Colors.black.withValues(alpha: AppSpacing.kioskOverlayOpacity),
+            color: Colors.black,
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(AppSpacing.s6),

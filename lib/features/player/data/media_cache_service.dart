@@ -43,11 +43,12 @@ class MediaCacheService {
   Directory? _cacheDir;
   bool _lruHydrated = false;
   int? _trackedTotalBytes;
+  bool _ledgerHydrated = false;
 
   int get budgetBytes => maxCacheMb * 1024 * 1024;
 
   Future<Directory> _directory() async {
-    await _hydrateLruFromDiskOnce();
+    await _hydrateFromDiskOnce();
     if (_cacheDir != null) return _cacheDir!;
     final root = await getApplicationSupportDirectory();
     final dir = Directory(p.join(root.path, 'media_cache'));
@@ -56,31 +57,43 @@ class MediaCacheService {
     return dir;
   }
 
-  Future<void> _hydrateLruFromDiskOnce() async {
-    if (_lruHydrated) return;
-    _lruHydrated = true;
+  Future<void> _hydrateFromDiskOnce() async {
+    if (_ledgerHydrated) return;
+    _ledgerHydrated = true;
     final storage = _persistentStorage;
-    if (storage == null) return;
+    if (storage == null) {
+      _lruHydrated = true;
+      return;
+    }
     try {
       final raw = storage.getString(
         StorageKeys.deviceBox,
         StorageKeys.mediaCacheLruJson,
       );
-      if (raw == null || raw.isEmpty) return;
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return;
-      for (final e in decoded.entries) {
-        final k = e.key;
-        final v = e.value;
-        if (k is String && v is num) {
-          _lastAccessEpochMs[k] = v.toInt();
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          for (final e in decoded.entries) {
+            final k = e.key;
+            final v = e.value;
+            if (k is String && v is num) {
+              _lastAccessEpochMs[k] = v.toInt();
+            }
+          }
         }
       }
+
+      final tracked = storage.getString(
+        StorageKeys.deviceBox,
+        StorageKeys.mediaCacheTrackedTotalBytes,
+      );
+      _trackedTotalBytes = int.tryParse((tracked ?? '').trim());
     } catch (e, st) {
       if (kDebugMode) {
-        debugPrint('MediaCacheService LRU hydrate: $e\n$st');
+        debugPrint('MediaCacheService hydrate: $e\n$st');
       }
     }
+    _lruHydrated = true;
   }
 
   Future<void> _persistLruToDisk() async {
@@ -99,33 +112,33 @@ class MediaCacheService {
     }
   }
 
+  Future<void> _persistTrackedTotalBytes() async {
+    final storage = _persistentStorage;
+    if (storage == null) return;
+    try {
+      final t = (_trackedTotalBytes ?? 0).clamp(0, 1 << 62);
+      _trackedTotalBytes = t;
+      await storage.setString(
+        StorageKeys.deviceBox,
+        StorageKeys.mediaCacheTrackedTotalBytes,
+        t.toString(),
+      );
+    } catch (_) {
+      // best-effort only
+    }
+  }
+
   void _touchPath(String path) {
     final now = DateTime.now().millisecondsSinceEpoch;
     _lastAccessEpochMs[path] = now;
     unawaited(_persistLruToDisk());
   }
 
-  Future<int> _directoryTotalBytes(Directory dir) async {
-    var total = 0;
-    if (!await dir.exists()) return 0;
-    await for (final e in dir.list(recursive: true)) {
-      if (e is File) {
-        total += await e.length();
-      }
-    }
-    return total;
-  }
-
-  Future<void> _refreshTrackedTotal() async {
-    final dir = await _directory();
-    _trackedTotalBytes = await _directoryTotalBytes(dir);
-  }
-
   /// Approximate cache usage in megabytes (best-effort).
   Future<int?> approximateCacheSizeMb() async {
     try {
-      await _refreshTrackedTotal();
-      final t = _trackedTotalBytes ?? 0;
+      await _directory(); // ensure disk hydration ran
+      final t = (_trackedTotalBytes ?? 0).clamp(0, 1 << 62);
       return (t / (1024 * 1024)).round();
     } catch (_) {
       return null;
@@ -135,7 +148,8 @@ class MediaCacheService {
   Future<void> _ensureSpaceForIncomingBytes(int incomingLen) async {
     await _directory();
     if (_trackedTotalBytes == null) {
-      await _refreshTrackedTotal();
+      _trackedTotalBytes = 0;
+      unawaited(_persistTrackedTotalBytes());
     }
     final budget = budgetBytes;
     while ((_trackedTotalBytes ?? 0) + incomingLen > budget) {
@@ -184,6 +198,7 @@ class MediaCacheService {
       if (_trackedTotalBytes! < 0) {
         _trackedTotalBytes = 0;
       }
+      unawaited(_persistTrackedTotalBytes());
       return true;
     } catch (e, st) {
       if (kDebugMode) {
@@ -196,7 +211,8 @@ class MediaCacheService {
   Future<void> _enforceBudgetIfNeeded() async {
     final budget = budgetBytes;
     if (_trackedTotalBytes == null) {
-      await _refreshTrackedTotal();
+      _trackedTotalBytes = 0;
+      unawaited(_persistTrackedTotalBytes());
     }
     while ((_trackedTotalBytes ?? 0) > budget) {
       final ok = await _evictLeastRecentlyUsedOne();
@@ -257,6 +273,7 @@ class MediaCacheService {
       if (!await file.exists()) return null;
 
       _trackedTotalBytes = (_trackedTotalBytes ?? 0) + len;
+      unawaited(_persistTrackedTotalBytes());
       _touchPath(file.path);
       await _enforceBudgetIfNeeded();
       return file.path;
@@ -330,6 +347,10 @@ class MediaCacheService {
           StorageKeys.deviceBox,
           StorageKeys.mediaCacheLruJson,
         );
+        await storage.remove(
+          StorageKeys.deviceBox,
+          StorageKeys.mediaCacheTrackedTotalBytes,
+        );
       }
       final dir = await _directory();
       if (!await dir.exists()) return;
@@ -338,6 +359,7 @@ class MediaCacheService {
           if (entity is File) await entity.delete();
         } catch (_) {}
       }
+      unawaited(_persistTrackedTotalBytes());
     } catch (e, st) {
       if (kDebugMode) {
         debugPrint('MediaCacheService.clearDiskCache: $e\n$st');
@@ -387,6 +409,7 @@ class MediaCacheService {
       if (removedPaths.isNotEmpty) {
         _pathByUrl.removeWhere((_, path) => removedPaths.contains(path));
         await _persistLruToDisk();
+        unawaited(_persistTrackedTotalBytes());
       }
     } catch (e, st) {
       if (kDebugMode) {

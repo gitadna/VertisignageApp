@@ -47,6 +47,10 @@ class DeviceHeartbeatService {
   int _retryAttempt = 0;
   bool _postInFlight = false;
 
+  DateTime? _lastCacheMetricAtUtc;
+  int? _lastCacheUsedMb;
+  static const Duration _cacheMetricInterval = Duration(minutes: 60);
+
   static const int _maxPersistedRetries = 24;
 
   void start() {
@@ -175,7 +179,14 @@ class DeviceHeartbeatService {
     Map<String, dynamic> data,
   ) async {
     try {
-      final cacheMb = await _cache.approximateCacheSizeMb();
+      final nowUtc = DateTime.now().toUtc();
+      int? cacheMb;
+      final lastAt = _lastCacheMetricAtUtc;
+      if (lastAt == null || nowUtc.difference(lastAt) >= _cacheMetricInterval) {
+        _lastCacheMetricAtUtc = nowUtc;
+        _lastCacheUsedMb = await _cache.approximateCacheSizeMb();
+      }
+      cacheMb = _lastCacheUsedMb;
       final payload = Map<String, dynamic>.from(data);
       final isOwner = await _device.isDeviceOwner();
       final inLockTask = await _device.isInLockTask();

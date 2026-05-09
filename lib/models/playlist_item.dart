@@ -97,7 +97,7 @@ class PlaylistItem {
       order: (json['order'] as num?)?.toInt() ?? 0,
       muted: json['muted'] as bool? ?? false,
       transition: (json['transition'] as String?)?.toLowerCase() ?? 'fade',
-      fitMode: (json['fitMode'] as String?)?.toLowerCase() ?? 'fill',
+      fitMode: (json['fitMode'] as String?)?.toLowerCase() ?? 'fit',
       urlPlaybackKind:
           UrlPlaybackKind.parse(json['urlPlaybackKind'] as String?),
     );

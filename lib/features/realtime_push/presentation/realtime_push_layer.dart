@@ -155,7 +155,7 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
     final caption = widget.state.caption?.trim();
     if (caption == null || caption.isEmpty) return const SizedBox.shrink();
     return Material(
-      color: Colors.black.withValues(alpha: 0.88),
+      color: Colors.black,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         child: Text(
@@ -206,7 +206,7 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
             bottom: 20,
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.72),
+                color: Colors.black,
                 borderRadius: BorderRadius.circular(8),
               ),
               child: const Padding(
