@@ -50,6 +50,9 @@ class VoiceBroadcastSignaling {
           .setPath('/socket.io')
           .setTransports(['websocket'])
           .setAuth(<String, dynamic>{'token': token})
+          .setExtraHeaders(<String, dynamic>{
+            'Authorization': token.startsWith('Bearer ') ? token : 'Bearer $token',
+          })
           .enableReconnection()
           .build(),
     );

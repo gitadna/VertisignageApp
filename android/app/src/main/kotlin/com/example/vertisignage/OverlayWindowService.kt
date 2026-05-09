@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
@@ -196,6 +197,10 @@ class OverlayWindowService : Service() {
             textSize = 24f
             setTextColor(0xFFFFFFFF.toInt())
             gravity = Gravity.CENTER
+            // Ensure announcement text is plain (no underline / highlight artifacts).
+            paintFlags = paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
+            highlightColor = Color.TRANSPARENT
+            setShadowLayer(0f, 0f, 0f, Color.TRANSPARENT)
         }
         root.addView(
             image,
