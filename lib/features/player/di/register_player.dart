@@ -10,11 +10,13 @@ import '../../../core/storage/local_storage.dart';
 import '../../../kiosk/fleet_realtime_coordinator.dart';
 import '../../../core/websocket/realtime_client.dart';
 import '../../../kiosk/connectivity_coordinator.dart';
+import '../../../kiosk/foreground_presentation_coordinator.dart';
 import '../../../services/device_service.dart';
 import '../../../services/token_store.dart';
 import '../data/device_heartbeat_service.dart';
 import '../data/announcement_overlay_notifier.dart';
 import '../data/emergency_overlay_notifier.dart';
+import '../../realtime_push/data/realtime_push_notifier.dart';
 import '../data/kiosk_fleet_api.dart';
 import '../data/media_cache_service.dart';
 import '../data/ota_update_service.dart';
@@ -64,6 +66,7 @@ void registerPlayerModule(GetIt getIt) {
       heartbeat: getIt<DeviceHeartbeatService>(),
       device: getIt<DeviceService>(),
       telemetry: getIt<PlayerTelemetry>(),
+      enqueueRecoveryOnScheduleBoundary: getIt<EnvironmentConfig>().kioskLockTask,
     ),
   );
 
@@ -82,6 +85,10 @@ void registerPlayerModule(GetIt getIt) {
     AnnouncementOverlayNotifier.new,
   );
 
+  getIt.registerLazySingleton<RealtimePushNotifier>(
+    RealtimePushNotifier.new,
+  );
+
   getIt.registerLazySingleton<ConnectivityCoordinator>(
     () => ConnectivityCoordinator(
       getIt<PlaylistSyncService>(),
@@ -95,6 +102,7 @@ void registerPlayerModule(GetIt getIt) {
       playlistSync: getIt<PlaylistSyncService>(),
       emergencyOverlay: getIt<EmergencyOverlayNotifier>(),
       announcementOverlay: getIt<AnnouncementOverlayNotifier>(),
+      realtimePush: getIt<RealtimePushNotifier>(),
       player: getIt<PlayerController>(),
       tokenStore: getIt<TokenStore>(),
       device: getIt<DeviceService>(),
@@ -132,6 +140,17 @@ void registerPlayerModule(GetIt getIt) {
       player: getIt<VoiceBroadcastPlayer>(),
       fleetApi: getIt<KioskFleetApi>(),
       deviceService: getIt<DeviceService>(),
+    ),
+  );
+
+  getIt.registerLazySingleton<ForegroundPresentationCoordinator>(
+    () => ForegroundPresentationCoordinator(
+      env: getIt<EnvironmentConfig>(),
+      device: getIt<DeviceService>(),
+      playlistSync: getIt<PlaylistSyncService>(),
+      announcement: getIt<AnnouncementOverlayNotifier>(),
+      emergency: getIt<EmergencyOverlayNotifier>(),
+      voicePlayer: getIt<VoiceBroadcastPlayer>(),
     ),
   );
 

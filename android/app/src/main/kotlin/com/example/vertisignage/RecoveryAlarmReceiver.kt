@@ -21,7 +21,7 @@ class RecoveryAlarmReceiver : BroadcastReceiver() {
         } catch (t: Throwable) {
             Log.w(TAG, "event=alarm_fgs_start_failed source=RecoveryAlarmReceiver reason=$reason msg=${t::class.java.simpleName}:${t.message}")
         }
-        CommandRelay.wakeApp(context)
+        // Do not elevate the Activity here; [RecoveryWorker] applies [ForegroundWakeGuard] when needed.
     }
 
     companion object {

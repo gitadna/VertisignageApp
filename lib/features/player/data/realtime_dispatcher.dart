@@ -20,6 +20,7 @@ import 'ota_update_service.dart';
 import 'player_telemetry.dart';
 import 'playlist_sync_service.dart';
 import '../presentation/player_controller.dart';
+import '../../realtime_push/data/realtime_push_notifier.dart';
 
 /// Subscribes to [RealtimeClient.messages] once and routes typed commands (non-blocking).
 class RealtimeDispatcher {
@@ -28,6 +29,7 @@ class RealtimeDispatcher {
     required PlaylistSyncService playlistSync,
     required EmergencyOverlayNotifier emergencyOverlay,
     required AnnouncementOverlayNotifier announcementOverlay,
+    required RealtimePushNotifier realtimePush,
     required PlayerController player,
     required TokenStore tokenStore,
     required DeviceService device,
@@ -40,6 +42,7 @@ class RealtimeDispatcher {
         _playlistSync = playlistSync,
         _emergencyOverlay = emergencyOverlay,
         _announcementOverlay = announcementOverlay,
+        _realtimePush = realtimePush,
         _player = player,
         _tokenStore = tokenStore,
         _device = device,
@@ -53,6 +56,7 @@ class RealtimeDispatcher {
   final PlaylistSyncService _playlistSync;
   final EmergencyOverlayNotifier _emergencyOverlay;
   final AnnouncementOverlayNotifier _announcementOverlay;
+  final RealtimePushNotifier _realtimePush;
   final PlayerController _player;
   final TokenStore _tokenStore;
   final DeviceService _device;
@@ -125,6 +129,17 @@ class RealtimeDispatcher {
     return WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
   }
 
+  /// Best-effort foreground bring-up for realtime push (no native overlay
+  /// fallback because realtime pushes are full-screen takeovers rendered
+  /// by the Flutter UI itself).
+  Future<bool> _ensureForeground() async {
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state == null || state == AppLifecycleState.resumed) return true;
+    final launchDispatched = await _device.wakeAppToForeground();
+    if (!launchDispatched) return false;
+    return await _waitForForeground();
+  }
+
   int? _scheduleEndsEpochMs(DateTime? utc) {
     if (utc == null) return null;
     return utc.toUtc().millisecondsSinceEpoch;
@@ -163,6 +178,40 @@ class RealtimeDispatcher {
       'lifecycleState': lifecycle,
       'nativeOverlayShown': overlayShown,
     };
+  }
+
+  /// For realtime pushes, we **must** maximize/foreground before showing Flutter UI,
+  /// otherwise the push is invisible if the kiosk app is minimized/backgrounded.
+  /// If foreground fails, fall back to native overlay and return false.
+  Future<bool> _ensureForegroundForRealtimePushOrFallbackOverlay({
+    required String text,
+    required String? mediaUrl,
+    required String? mediaKind,
+    required int durationSec,
+  }) async {
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state == null || state == AppLifecycleState.resumed) {
+      await _device.hideOverlay();
+      return true;
+    }
+
+    final launchDispatched = await _device.wakeAppToForeground();
+    final resumed = launchDispatched && await _waitForForeground();
+    if (resumed) {
+      await _device.hideOverlay();
+      return true;
+    }
+
+    // Native overlay ensures operators still see something even if the app cannot foreground.
+    await _device.showOverlay(
+      text: text,
+      mediaUrl: mediaUrl,
+      mediaKind: mediaKind,
+      untilDismissed: false,
+      durationSec: durationSec,
+      scheduleEndsAtEpochMs: null,
+    );
+    return false;
   }
 
   String? _resolveMediaUrl(String? rawUrl) {
@@ -443,6 +492,97 @@ class RealtimeDispatcher {
       return;
     }
 
+    if (cmd is RealtimePushCommand) {
+      final wasActive = _realtimePush.isActive;
+      final kind = realtimePushContentKindFromString(cmd.contentKind);
+      if (kind == null) return;
+
+      // For media kinds, normalize the URL the same way announcements do so
+      // that uploads served by the API host work even when the backend sends
+      // a localhost URL (dev) or a relative path.
+      String? mediaUrl = cmd.mediaUrl;
+      if (kind != RealtimePushContentKind.text) {
+        mediaUrl = _resolveMediaUrl(cmd.mediaUrl);
+        if (mediaUrl == null || mediaUrl.isEmpty) return;
+      }
+
+      // Take over the playlist: pause it now, resume when the push ends.
+      _player.beginAnnouncementHold();
+      // Maximize/foreground first so the push is actually visible. If we cannot
+      // foreground, fall back to native overlay and still unblock playlist after
+      // the duration.
+      final durationSec = cmd.durationSec.clamp(1, 3600);
+      final foregroundOk = await _ensureForegroundForRealtimePushOrFallbackOverlay(
+        text: (cmd.text ?? cmd.caption ?? ' ').trim().isEmpty
+            ? ' '
+            : (cmd.text ?? cmd.caption!).trim(),
+        mediaUrl: mediaUrl,
+        mediaKind: cmd.mediaKind,
+        durationSec: durationSec,
+      );
+
+      if (foregroundOk) {
+        _realtimePush.show(
+          RealtimePushState(
+            pushId: cmd.pushId,
+            contentKind: kind,
+            mediaUrl: mediaUrl,
+            text: cmd.text,
+            caption: cmd.caption,
+            durationSec: durationSec,
+            fitMode: realtimePushFitModeFromString(cmd.fitMode),
+            muted: cmd.muted,
+            startedAtUtc: DateTime.now().toUtc(),
+            issuedAtUtc: cmd.issuedAtUtc,
+          ),
+          onCleared: () {
+            _player.endAnnouncementHold();
+            // Refresh once after the push so any playlist/schedule changes
+            // that happened during the takeover are picked up promptly.
+            unawaited(_playlistSync.sync(forceCommit: true));
+          },
+        );
+      } else {
+        // Overlay is handled natively; end hold after its duration.
+        unawaited(Future<void>.delayed(Duration(seconds: durationSec)).then((_) async {
+          _player.endAnnouncementHold();
+          await _playlistSync.sync(forceCommit: true);
+        }));
+      }
+
+      KioskLog.event(
+        'realtime_push',
+        wasActive ? 'replaced_active' : 'started',
+        level: 'info',
+        meta: <String, dynamic>{
+          'pushId': cmd.pushId,
+          'contentKind': cmd.contentKind,
+          'durationSec': cmd.durationSec,
+        },
+      );
+      return;
+    }
+
+    if (cmd is RealtimePushClearCommand) {
+      _realtimePush.clear(pushId: cmd.pushId);
+      return;
+    }
+
+    if (cmd is RealtimePushControlCommand) {
+      switch (cmd.action) {
+        case 'pause':
+          _realtimePush.pause(pushId: cmd.pushId);
+          break;
+        case 'resume':
+          _realtimePush.resume(pushId: cmd.pushId);
+          break;
+        case 'restart':
+          _realtimePush.restart(pushId: cmd.pushId);
+          break;
+      }
+      return;
+    }
+
     if (cmd is EmergencyAlertCommand) {
       _emergencyOverlay.show(
         alertId: cmd.alertId,
@@ -554,6 +694,30 @@ class RealtimeDispatcher {
         if (payload != null && payload.isNotEmpty) {
           await dispatchRealtimePayload(payload);
         }
+        return;
+      }
+      if (vsCmd == 'REALTIME_PUSH') {
+        final payload = data['vs_payload']?.toString();
+        if (payload != null && payload.isNotEmpty) {
+          await dispatchRealtimePayload(payload);
+        }
+        return;
+      }
+      if (vsCmd == 'REALTIME_PUSH_CLEAR') {
+        final pid = data['vs_push_id']?.toString();
+        await _dispatch(
+          RealtimePushClearCommand(
+            pushId: (pid != null && pid.isNotEmpty) ? pid : null,
+          ),
+        );
+        return;
+      }
+      if (vsCmd == 'REALTIME_PUSH_CONTROL') {
+        final payload = data['vs_payload']?.toString();
+        if (payload != null && payload.isNotEmpty) {
+          await dispatchRealtimePayload(payload);
+        }
+        return;
       }
     } catch (e, st) {
       if (kDebugMode) {

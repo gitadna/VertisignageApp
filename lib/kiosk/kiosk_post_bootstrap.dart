@@ -15,6 +15,7 @@ import '../services/device_service.dart';
 import '../services/token_store.dart';
 import 'connectivity_coordinator.dart';
 import 'fleet_realtime_coordinator.dart';
+import 'foreground_presentation_coordinator.dart';
 import 'push_registration_coordinator.dart';
 
 /// Post-DI kiosk wiring: global errors, immersive chrome, connectivity, foreground, lock task.
@@ -75,6 +76,8 @@ abstract final class KioskPostBootstrap {
     await _maybeLogNotificationDeniedOnce();
 
     await sl<ConnectivityCoordinator>().start();
+
+    sl<ForegroundPresentationCoordinator>().start();
 
     if (env.kioskLockTask && tokenStore.hasPairedDevice) {
       final owner = await device.isDeviceOwner();

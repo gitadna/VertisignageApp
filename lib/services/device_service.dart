@@ -276,6 +276,47 @@ class DeviceService {
     }
   }
 
+  /// Relaxed tablets (teacher mode): watchdog / alarms may skip bringing VertiSignage to the front.
+  Future<void> configureForegroundWake({required bool relaxedTeacherMode}) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _device.invokeMethod<void>(
+        'configureForegroundWake',
+        <String, dynamic>{'relaxedTeacherMode': relaxedTeacherMode},
+      );
+    } catch (e, st) {
+      KioskLog.e('DeviceService.configureForegroundWake', e, st);
+    }
+  }
+
+  /// Native recovery uses this together with backdrop hint (onUserLeaveHint) to decide wakes.
+  Future<void> syncForegroundPresentationState({
+    required bool presentationWantsForeground,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _device.invokeMethod<void>(
+        'syncForegroundPresentationState',
+        <String, dynamic>{
+          'presentationWantsForeground': presentationWantsForeground,
+        },
+      );
+    } catch (e, st) {
+      KioskLog.e('DeviceService.syncForegroundPresentationState', e, st);
+    }
+  }
+
+  Future<bool> moveTaskToBack() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final ok = await _device.invokeMethod<bool>('moveTaskToBack');
+      return ok ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.moveTaskToBack', e, st);
+      return false;
+    }
+  }
+
   /// Persist API base URL + device JWT for native FCM fallback (overlay when Flutter is dead).
   Future<void> syncPushContextForNative({
     required String apiBaseUrl,

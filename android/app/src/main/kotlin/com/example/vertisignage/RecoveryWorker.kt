@@ -44,11 +44,19 @@ class RecoveryWorker(
             }
             ContextCompat.startForegroundService(applicationContext, serviceIntent)
             if (serviceStale || uiStale) {
-                val wakeOk = CommandRelay.wakeApp(applicationContext)
-                if (!wakeOk) {
-                    RecoveryScheduler.scheduleAlarmFallback(applicationContext, "worker_wake_failed:$reason", 15_000L)
+                if (ForegroundWakeGuard.allowRecoveryBringToForeground(applicationContext)) {
+                    val wakeOk = CommandRelay.wakeApp(applicationContext)
+                    if (!wakeOk) {
+                        RecoveryScheduler.scheduleAlarmFallback(applicationContext, "worker_wake_failed:$reason", 15_000L)
+                    }
+                    log("worker_watchdog_recovery", "serviceStale=$serviceStale uiStale=$uiStale reason=$reason")
+                } else {
+                    log(
+                        "worker_watchdog_recovery_skipped",
+                        "presentation_idle_user_backdrop reason=$reason",
+                        Log.INFO,
+                    )
                 }
-                log("worker_watchdog_recovery", "serviceStale=$serviceStale uiStale=$uiStale reason=$reason")
             }
             RecoveryScheduler.scheduleAlarmFallback(applicationContext, "worker:$reason", 120_000L)
             log("worker_start_fgs", "requested reason=$reason")

@@ -28,6 +28,8 @@ class PlaylistSyncService extends ChangeNotifier {
     required DeviceService device,
     PlayerTelemetry? telemetry,
     PlaylistSyncDiagnostic? logDiagnostic,
+    /// Strict kiosk installs still kick native recovery at schedule boundaries; teacher tablets rely on alarms less.
+    this.enqueueRecoveryOnScheduleBoundary = true,
   })  : _storage = storage,
         _api = api,
         _cache = cache,
@@ -43,6 +45,7 @@ class PlaylistSyncService extends ChangeNotifier {
   final TokenStore _tokenStore;
   final DeviceHeartbeatService _heartbeat;
   final DeviceService _device;
+  final bool enqueueRecoveryOnScheduleBoundary;
   final PlayerTelemetry? _telemetry;
   final PlaylistSyncDiagnostic? _logDiagnostic;
 
@@ -305,12 +308,18 @@ class PlaylistSyncService extends ChangeNotifier {
     // the kiosk lost the previous notification while the schedule lifecycle worker was still mid-tick.
     final isEdge = wait <= const Duration(seconds: 1);
     _boundaryTimer = Timer(wait, () {
-      unawaited(_device.recoveryEnqueueNow('schedule_boundary_hit'));
+      if (enqueueRecoveryOnScheduleBoundary) {
+        unawaited(_device.recoveryEnqueueNow('schedule_boundary_hit'));
+      }
       unawaited(sync(forceCommit: true));
       if (isEdge) {
-        unawaited(_device.recoveryEnqueueNow('schedule_boundary_edge'));
+        if (enqueueRecoveryOnScheduleBoundary) {
+          unawaited(_device.recoveryEnqueueNow('schedule_boundary_edge'));
+        }
         Timer(const Duration(seconds: 1), () {
-          unawaited(_device.recoveryEnqueueNow('schedule_boundary_retry'));
+          if (enqueueRecoveryOnScheduleBoundary) {
+            unawaited(_device.recoveryEnqueueNow('schedule_boundary_retry'));
+          }
           unawaited(sync(forceCommit: true));
         });
       }

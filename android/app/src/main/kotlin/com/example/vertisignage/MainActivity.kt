@@ -27,6 +27,18 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private lateinit var policyManager: DeviceOwnerPolicyManager
 
+    override fun onResume() {
+        super.onResume()
+        ForegroundWakePolicy.clearUserBackdropHint(applicationContext)
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (ForegroundWakePolicy.isRelaxedTeacherMode(applicationContext)) {
+            ForegroundWakePolicy.markUserBackdropHint(applicationContext)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installCrashRestartHandler()
@@ -160,6 +172,19 @@ class MainActivity : FlutterActivity() {
                             result.success(installApkFile(File(path)))
                         }
                     }
+                    "configureForegroundWake" -> {
+                        val relaxed = call.argument<Boolean>("relaxedTeacherMode") ?: false
+                        ForegroundWakePolicy.setRelaxedTeacherMode(applicationContext, relaxed)
+                        result.success(true)
+                    }
+                    "syncForegroundPresentationState" -> {
+                        val wants = call.argument<Boolean>("presentationWantsForeground") ?: false
+                        ForegroundWakePolicy.syncPresentationState(applicationContext, wants)
+                        result.success(true)
+                    }
+                    "moveTaskToBack" -> {
+                        result.success(moveTaskToRoot())
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -267,6 +292,14 @@ class MainActivity : FlutterActivity() {
     private fun wakeApp(): Boolean {
         return CommandRelay.wakeApp(this)
     }
+
+    /** Non-root callers use [moveTaskToBack]; root activity moves the whole task. */
+    private fun moveTaskToRoot(): Boolean =
+        try {
+            moveTaskToBack(true)
+        } catch (_: Exception) {
+            false
+        }
 
     /**
      * Relaunch this app's launcher activity.

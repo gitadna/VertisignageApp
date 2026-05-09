@@ -112,10 +112,14 @@ class KioskForegroundService : Service() {
             }
         }
         if (forceWakeUi) {
-            val ok = CommandRelay.wakeApp(this)
-            if (!ok) {
-                RecoveryScheduler.enqueueNow(applicationContext, "force_wake_failed")
-                RecoveryScheduler.scheduleAlarmFallback(applicationContext, "force_wake_failed", 15_000L)
+            if (ForegroundWakeGuard.allowRecoveryBringToForeground(this)) {
+                val ok = CommandRelay.wakeApp(this)
+                if (!ok) {
+                    RecoveryScheduler.enqueueNow(applicationContext, "force_wake_failed")
+                    RecoveryScheduler.scheduleAlarmFallback(applicationContext, "force_wake_failed", 15_000L)
+                }
+            } else {
+                log(event = "force_wake_ui_skipped", action = action, reason = "foreground_wake_guard")
             }
         }
         return START_STICKY
@@ -124,7 +128,13 @@ class KioskForegroundService : Service() {
     override fun onTaskRemoved(rootIntent: Intent?) {
         log(event = "service_task_removed", action = null, reason = null, level = Log.WARN)
         RecoveryScheduler.enqueueNow(applicationContext, "service_task_removed")
-        val ok = CommandRelay.wakeApp(this)
+        val ok =
+            if (ForegroundWakeGuard.allowRecoveryBringToForeground(this)) {
+                CommandRelay.wakeApp(this)
+            } else {
+                log(event = "task_removed_wake_skipped", action = null, reason = "foreground_wake_guard", level = Log.INFO)
+                false
+            }
         if (!ok) {
             RecoveryScheduler.scheduleAlarmFallback(applicationContext, "task_removed_wake_failed", 10_000L)
         }

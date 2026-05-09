@@ -19,6 +19,7 @@ import 'emergency_overlay_layer.dart';
 import 'playback_layers.dart';
 import 'player_controller.dart';
 import 'player_kiosk_overlay.dart';
+import '../../realtime_push/presentation/realtime_push_layer.dart';
 import '../../voice_broadcast/presentation/voice_takeover_overlay.dart';
 
 const Duration _kPlaylistSwitchDuration = Duration(milliseconds: 450);
@@ -180,8 +181,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _showStartupDiagnostics() async {
     if (!Platform.isAndroid) return;
     final device = sl<DeviceService>();
-    final ignoringBatteryOptimization =
-        await device.isIgnoringBatteryOptimizations();
+    final ignoringBatteryOptimization = await device
+        .isIgnoringBatteryOptimizations();
     if (!mounted) return;
 
     await showDialog<void>(
@@ -237,8 +238,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
               if (!opened) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content:
-                        Text('Could not open Battery optimization settings.'),
+                    content: Text(
+                      'Could not open Battery optimization settings.',
+                    ),
                   ),
                 );
               }
@@ -343,7 +345,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           isPaused: paused,
                           onInteract: _onOverlayInteraction,
                           onPlayPause: widget.controller.togglePause,
-                          onPrevious: () => unawaited(widget.controller.goToPrevious()),
+                          onPrevious: () =>
+                              unawaited(widget.controller.goToPrevious()),
                           onNext: () => unawaited(widget.controller.goToNext()),
                           onClearCache: () => unawaited(
                             _confirmAndRun(
@@ -386,6 +389,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           const AnnouncementOverlayLayer(),
           const AnnouncementTickerLayer(),
+          const RealtimePushLayer(),
           const EmergencyOverlayLayer(),
           const VoiceTakeoverOverlay(),
         ],
@@ -459,15 +463,15 @@ class _PlaylistIdleOverlay extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final tokens = Theme.of(context).extension<VertisignageColors>();
     final muted = tokens?.textMuted ?? cs.onSurfaceVariant;
-    final titleStyle = Theme.of(context).textTheme.headlineSmall?.copyWith(
-          color: cs.onSurface,
-        );
-    final bodyStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
-          color: cs.onSurfaceVariant,
-        );
-    final captionStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: muted,
-        );
+    final titleStyle = Theme.of(
+      context,
+    ).textTheme.headlineSmall?.copyWith(color: cs.onSurface);
+    final bodyStyle = Theme.of(
+      context,
+    ).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant);
+    final captionStyle = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: muted);
 
     late final Widget body;
     if (sync.isSyncing) {
@@ -477,10 +481,7 @@ class _PlaylistIdleOverlay extends StatelessWidget {
           SizedBox(
             width: AppSpacing.s10,
             height: AppSpacing.s10,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: cs.primary,
-            ),
+            child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
           ),
           const SizedBox(height: AppSpacing.s6),
           Text(
@@ -500,11 +501,7 @@ class _PlaylistIdleOverlay extends StatelessWidget {
       body = Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.cloud_off_outlined,
-            color: muted,
-            size: AppSpacing.s12,
-          ),
+          Icon(Icons.cloud_off_outlined, color: muted, size: AppSpacing.s12),
           const SizedBox(height: AppSpacing.s6),
           Text(
             'Could not load content',
@@ -529,16 +526,25 @@ class _PlaylistIdleOverlay extends StatelessWidget {
       body = Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.playlist_remove_outlined,
-            color: muted,
-            size: AppSpacing.s12,
-          ),
           const SizedBox(height: AppSpacing.s6),
-          Text(
-            'No slides in this playlist',
-            style: titleStyle,
-            textAlign: TextAlign.center,
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12.0),
+                child: Image.asset(
+                  'assets/verti_signage_logo.png',
+                  height: AppSpacing.s12,
+                  fit: BoxFit.contain,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.s3),
+              Text(
+                'powered by vertilinks',
+                style: titleStyle,
+                textAlign: TextAlign.center,
+              ),
+            ],
           ),
           const SizedBox(height: AppSpacing.s3),
           Text(
@@ -562,10 +568,7 @@ class _PlaylistIdleOverlay extends StatelessWidget {
           SizedBox(
             width: AppSpacing.s10,
             height: AppSpacing.s10,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: cs.primary,
-            ),
+            child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
           ),
           const SizedBox(height: AppSpacing.s6),
           Text(

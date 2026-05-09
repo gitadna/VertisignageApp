@@ -214,6 +214,55 @@ class AnnouncementClearCommand extends RealtimeCommand {
   final String? announcementId;
 }
 
+/// Ephemeral, fire-and-forget realtime content push from the admin console.
+///
+/// On receive, the kiosk pauses its current playlist, plays the pushed item
+/// full-screen for [durationSec], then resumes the playlist. There is no
+/// reconnect re-dispatch — if the device misses the window, it is missed.
+class RealtimePushCommand extends RealtimeCommand {
+  const RealtimePushCommand({
+    required this.pushId,
+    required this.contentKind,
+    this.mediaUrl,
+    this.mediaKind,
+    this.text,
+    this.caption,
+    required this.durationSec,
+    this.fitMode,
+    this.muted = true,
+    this.issuedAtUtc,
+  });
+
+  final String pushId;
+  /// One of `image`, `video`, `url`, `text`.
+  final String contentKind;
+  final String? mediaUrl;
+  final String? mediaKind;
+  final String? text;
+  final String? caption;
+  final int durationSec;
+  final String? fitMode;
+  final bool muted;
+  final DateTime? issuedAtUtc;
+}
+
+class RealtimePushClearCommand extends RealtimeCommand {
+  const RealtimePushClearCommand({this.pushId});
+  final String? pushId;
+}
+
+/// Remote control for the active realtime push (pause / resume / restart).
+class RealtimePushControlCommand extends RealtimeCommand {
+  const RealtimePushControlCommand({
+    this.pushId,
+    required this.action,
+  });
+
+  final String? pushId;
+  /// One of `pause`, `resume`, `restart`.
+  final String action;
+}
+
 String? _coerceNonEmptyString(dynamic raw) {
   if (raw is! String) return null;
   final trimmed = raw.trim();
@@ -496,6 +545,80 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         if (payload is! Map<String, dynamic>) return const AnnouncementClearCommand();
         return AnnouncementClearCommand(
           announcementId: payload['announcementId'] as String?,
+        );
+      case 'REALTIME_PUSH':
+        if (payload is! Map<String, dynamic>) return null;
+        final pushId = _coerceNonEmptyString(payload['pushId']);
+        final kind = _coerceNonEmptyString(payload['contentKind'])?.toLowerCase();
+        if (pushId == null || kind == null) return null;
+        if (kind != 'image' && kind != 'video' && kind != 'url' && kind != 'text') {
+          return null;
+        }
+        final ds = payload['durationSec'];
+        final durationSec = ds is num ? ds.round() : 30;
+        final issuedAtRaw = _coerceNonEmptyString(payload['issuedAt']);
+        final mutedRaw = payload['muted'];
+        final muted = mutedRaw is bool ? mutedRaw : true;
+        if (kind == 'text') {
+          final text = _coerceNonEmptyString(payload['text']);
+          if (text == null) return null;
+          return RealtimePushCommand(
+            pushId: pushId,
+            contentKind: kind,
+            text: text,
+            caption: _coerceNonEmptyString(payload['caption']),
+            durationSec: durationSec.clamp(5, 600),
+            fitMode: _coerceNonEmptyString(payload['fitMode'])?.toLowerCase(),
+            muted: muted,
+            issuedAtUtc: issuedAtRaw != null
+                ? DateTime.tryParse(issuedAtRaw)?.toUtc()
+                : null,
+          );
+        }
+        final resolvedMedia = _resolveIncomingMedia(payload);
+        final mediaUrl = resolvedMedia.mediaUrl;
+        if (mediaUrl == null) return null;
+        return RealtimePushCommand(
+          pushId: pushId,
+          contentKind: kind,
+          mediaUrl: mediaUrl,
+          mediaKind: resolvedMedia.mediaKind ?? (kind == 'video'
+              ? 'video'
+              : kind == 'image'
+                  ? 'image'
+                  : 'url'),
+          caption: _coerceNonEmptyString(payload['caption']),
+          durationSec: durationSec.clamp(5, 600),
+          fitMode: _coerceNonEmptyString(payload['fitMode'])?.toLowerCase(),
+          muted: muted,
+          issuedAtUtc: issuedAtRaw != null
+              ? DateTime.tryParse(issuedAtRaw)?.toUtc()
+              : null,
+        );
+      case 'REALTIME_PUSH_CLEAR':
+        if (payload is! Map<String, dynamic>) {
+          return const RealtimePushClearCommand();
+        }
+        return RealtimePushClearCommand(
+          pushId: payload['pushId'] as String?,
+        );
+      case 'REALTIME_PUSH_CONTROL':
+        if (payload is! Map<String, dynamic>) return null;
+        final actionRaw = (payload['action'] as String?)?.trim().toLowerCase();
+        final String action;
+        switch (actionRaw) {
+          case 'pause':
+            action = 'pause';
+          case 'resume':
+            action = 'resume';
+          case 'restart':
+            action = 'restart';
+          default:
+            return null;
+        }
+        return RealtimePushControlCommand(
+          pushId: _coerceNonEmptyString(payload['pushId']),
+          action: action,
         );
       default:
         return null;
