@@ -56,7 +56,7 @@ class PlaylistItem {
     required this.order,
     this.muted = false,
     this.transition = 'fade',
-    this.fitMode = 'fill',
+    this.fitMode = 'fit',
     this.urlPlaybackKind = UrlPlaybackKind.unknown,
   });
 

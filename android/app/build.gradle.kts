@@ -8,6 +8,9 @@ plugins {
 
 android {
     namespace = "com.example.vertisignage"
+    buildFeatures {
+        buildConfig = true
+    }
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 

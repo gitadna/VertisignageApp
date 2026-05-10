@@ -1,15 +1,24 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:wakelock_plus/wakelock_plus.dart';
+
 import '../core/config/environment_config.dart';
 import '../features/player/data/announcement_overlay_notifier.dart';
 import '../features/player/data/emergency_overlay_notifier.dart';
+import '../features/player/data/playback_perf_telemetry.dart';
 import '../features/player/data/playlist_sync_service.dart';
 import '../features/voice_broadcast/data/voice_broadcast_player.dart';
 import '../services/device_service.dart';
 
 /// Pushes kiosk “should we steal focus?” state to native and optionally backgrounds the task
-/// when scheduled / urgent playback ends — only when strict lock-task kiosk is disabled.
+/// when scheduled / urgent playback ends.
+///
+/// **Wakelock** follows the same “wants foreground” signal (active playlist, announcements,
+/// emergency, voice takeover) on all platforms.
+///
+/// **moveTaskToBack** is Android-only and skipped when [EnvironmentConfig.kioskLockTask] is true
+/// (strict unattended kiosk must stay on-screen by design).
 class ForegroundPresentationCoordinator {
   ForegroundPresentationCoordinator({
     required EnvironmentConfig env,
@@ -41,13 +50,14 @@ class ForegroundPresentationCoordinator {
   void start() {
     if (_started) return;
     _started = true;
-    if (!Platform.isAndroid) return;
 
-    unawaited(
-      _device.configureForegroundWake(
-        relaxedTeacherMode: !_env.kioskLockTask,
-      ),
-    );
+    if (Platform.isAndroid) {
+      unawaited(
+        _device.configureForegroundWake(
+          relaxedTeacherMode: !_env.kioskLockTask,
+        ),
+      );
+    }
 
     void onChange() => _scheduleSync();
 
@@ -68,14 +78,21 @@ class ForegroundPresentationCoordinator {
   }
 
   Future<void> _flush() async {
-    if (!_started || !Platform.isAndroid) return;
+    if (!_started) return;
     final wants = _presentationWantsForeground();
     final prev = _lastWantsForeground;
     _lastWantsForeground = wants;
-    await _device.syncForegroundPresentationState(
-      presentationWantsForeground: wants,
-    );
-    _maybeDeferToBackground(prev: prev, now: wants);
+    if (wants) {
+      await WakelockPlus.enable();
+    } else {
+      await WakelockPlus.disable();
+    }
+    if (Platform.isAndroid) {
+      await _device.syncForegroundPresentationState(
+        presentationWantsForeground: wants,
+      );
+      _maybeDeferToBackground(prev: prev, now: wants);
+    }
   }
 
   bool _presentationWantsForeground() {
@@ -97,7 +114,12 @@ class ForegroundPresentationCoordinator {
     _minimizeAfterIdleDebounce = Timer(const Duration(milliseconds: 550), () {
       _minimizeAfterIdleDebounce = null;
       if (_presentationWantsForeground()) return;
-      unawaited(_device.moveTaskToBack());
+      unawaited(() async {
+        final ok = await _device.moveTaskToBack();
+        if (ok == false) {
+          PlaybackPerfTelemetry.moveTaskToBackDenied();
+        }
+      }());
     });
   }
 }

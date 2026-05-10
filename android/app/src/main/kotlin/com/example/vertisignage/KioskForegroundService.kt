@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.PowerManager
 import android.util.Log
+import com.example.vertisignage.BuildConfig
 import androidx.core.app.NotificationCompat
 
 class KioskForegroundService : Service() {
@@ -59,7 +60,7 @@ class KioskForegroundService : Service() {
                     startForeground(
                         NOTIFICATION_ID,
                         notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+                        kioskForegroundServiceType(),
                     )
                 } else {
                     @Suppress("DEPRECATION")
@@ -152,7 +153,7 @@ class KioskForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val ch = NotificationChannel(
             CHANNEL_ID,
-            "VertiSignage playback",
+            "VertiSignage remote messaging",
             NotificationManager.IMPORTANCE_LOW,
         )
         val nm = getSystemService(NotificationManager::class.java)
@@ -180,7 +181,7 @@ class KioskForegroundService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("VertiSignage")
-            .setContentText("Display active")
+            .setContentText("Listening for admin updates")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pi)
             .setOngoing(true)
@@ -227,9 +228,18 @@ class KioskForegroundService : Service() {
         when (level) {
             Log.WARN -> Log.w(TAG, msg)
             Log.ERROR -> Log.e(TAG, msg)
-            else -> Log.i(TAG, msg)
+            else ->
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, msg)
+                } else {
+                    /* Routine FG service lifecycle logs omitted outside debug builds */
+                }
         }
     }
+
+    /** Must match manifest `KioskForegroundService` foregroundServiceType (remoteMessaging). */
+    private fun kioskForegroundServiceType(): Int =
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
 
     companion object {
         /** Starts MainActivity from foreground-service context (BAL-friendly). */

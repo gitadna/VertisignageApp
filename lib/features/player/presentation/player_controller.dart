@@ -349,9 +349,13 @@ class PlayerController {
 
   Future<void> _preloadNext() async {
     if (_playlist.length <= 1 || !_running) return;
-    final next = _playlist[(_index + 1) % _playlist.length];
-    if (next.mediaKind == PlaylistMediaKind.url) return;
-    await _cache.resolveLocalPath(next.url);
+    final len = _playlist.length;
+    final ahead = <int>{(_index + 1) % len, (_index + 2) % len};
+    for (final i in ahead) {
+      final item = _playlist[i];
+      if (item.mediaKind == PlaylistMediaKind.url) continue;
+      unawaited(_cache.resolveLocalPath(item.url));
+    }
   }
 
   /// WebView reached a stable load point — start dwell timer.

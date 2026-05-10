@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart';
 
+import '../../../core/config/environment_config.dart';
 import '../../../core/errors/app_exception.dart';
+import '../../../core/telemetry/fleet_telemetry.dart';
 import '../../../models/playlist_bundle.dart';
 import '../../../models/playlist_item.dart';
 import '../../../models/playlist_schedule_context.dart';
@@ -11,6 +15,7 @@ import '../../../services/device_service.dart';
 import '../../../services/token_store.dart';
 import 'device_heartbeat_service.dart';
 import 'media_cache_service.dart';
+import 'playback_perf_telemetry.dart';
 import 'player_telemetry.dart';
 import 'playlist_api.dart';
 import 'playlist_storage.dart';
@@ -26,6 +31,7 @@ class PlaylistSyncService extends ChangeNotifier {
     required TokenStore tokenStore,
     required DeviceHeartbeatService heartbeat,
     required DeviceService device,
+    required EnvironmentConfig env,
     PlayerTelemetry? telemetry,
     PlaylistSyncDiagnostic? logDiagnostic,
     /// Strict kiosk installs still kick native recovery at schedule boundaries; teacher tablets rely on alarms less.
@@ -36,6 +42,7 @@ class PlaylistSyncService extends ChangeNotifier {
         _tokenStore = tokenStore,
         _heartbeat = heartbeat,
         _device = device,
+        _env = env,
         _telemetry = telemetry,
         _logDiagnostic = logDiagnostic;
 
@@ -45,6 +52,7 @@ class PlaylistSyncService extends ChangeNotifier {
   final TokenStore _tokenStore;
   final DeviceHeartbeatService _heartbeat;
   final DeviceService _device;
+  final EnvironmentConfig _env;
   final bool enqueueRecoveryOnScheduleBoundary;
   final PlayerTelemetry? _telemetry;
   final PlaylistSyncDiagnostic? _logDiagnostic;
@@ -117,6 +125,7 @@ class PlaylistSyncService extends ChangeNotifier {
   }
 
   bool _forceCommitNextRun = false;
+  bool _deferredBoundaryMinimize = false;
 
   /// Coalesced sync: at most one run in flight; duplicate callers get merged.
   ///
@@ -124,8 +133,9 @@ class PlaylistSyncService extends ChangeNotifier {
   /// to active playback immediately, instead of waiting for the next slide boundary. Use this
   /// whenever the backend indicates an explicit content-replacement event (force-immediate
   /// PLAYLIST_UPDATED), so kiosks reflect admin changes within a second even mid-video.
-  Future<void> sync({bool forceCommit = false}) async {
+  Future<void> sync({bool forceCommit = false, bool minimizeAfterBoundary = false}) async {
     if (forceCommit) _forceCommitNextRun = true;
+    if (minimizeAfterBoundary) _deferredBoundaryMinimize = true;
     if (_syncRunning) {
       _syncQueued = true;
       return;
@@ -144,8 +154,19 @@ class PlaylistSyncService extends ChangeNotifier {
       if (_syncQueued) {
         _syncQueued = false;
         unawaited(sync());
+      } else if (_deferredBoundaryMinimize) {
+        _deferredBoundaryMinimize = false;
+        unawaited(_maybeBoundaryMinimize());
       }
     }
+  }
+
+  Future<void> _maybeBoundaryMinimize() async {
+    if (kIsWeb || !Platform.isAndroid || _env.kioskLockTask) return;
+    await _device.hideOverlay();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    final ok = await _device.moveTaskToBack();
+    if (ok == false) PlaybackPerfTelemetry.moveTaskToBackDenied();
   }
 
   Future<void> _runSync() async {
@@ -297,7 +318,12 @@ class PlaylistSyncService extends ChangeNotifier {
 
   void _scheduleBoundaryTimer(DateTime? nextBoundaryUtc) {
     _boundaryTimer?.cancel();
-    if (nextBoundaryUtc == null) return;
+    if (nextBoundaryUtc == null) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        unawaited(_device.cancelPlaylistBoundaryAlarm());
+      }
+      return;
+    }
     final now = DateTime.now().toUtc();
     var wait = nextBoundaryUtc.difference(now);
     if (wait.isNegative) wait = Duration.zero;
@@ -311,7 +337,7 @@ class PlaylistSyncService extends ChangeNotifier {
       if (enqueueRecoveryOnScheduleBoundary) {
         unawaited(_device.recoveryEnqueueNow('schedule_boundary_hit'));
       }
-      unawaited(sync(forceCommit: true));
+      unawaited(sync(forceCommit: true, minimizeAfterBoundary: true));
       if (isEdge) {
         if (enqueueRecoveryOnScheduleBoundary) {
           unawaited(_device.recoveryEnqueueNow('schedule_boundary_edge'));
@@ -320,10 +346,34 @@ class PlaylistSyncService extends ChangeNotifier {
           if (enqueueRecoveryOnScheduleBoundary) {
             unawaited(_device.recoveryEnqueueNow('schedule_boundary_retry'));
           }
-          unawaited(sync(forceCommit: true));
+          unawaited(sync(forceCommit: true, minimizeAfterBoundary: true));
         });
       }
     });
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      unawaited(
+        _scheduleNativePlaylistBoundaryAlarm(
+          nextBoundaryUtc.millisecondsSinceEpoch,
+        ),
+      );
+    }
+  }
+
+  Future<void> _scheduleNativePlaylistBoundaryAlarm(int epochMs) async {
+    await _device.cancelPlaylistBoundaryAlarm();
+    final ok = await _device.schedulePlaylistBoundaryAlarm(epochMs: epochMs);
+    if (!ok) {
+      FleetTelemetry.event(
+        'playlist_schedule',
+        'exact_alarm_not_scheduled',
+      );
+      if (kDebugMode) {
+        _log(
+          'native exact boundary alarm not scheduled — relying on in-app timer '
+          '(grant Alarms & reminders / exact alarms for stronger schedule fidelity)',
+        );
+      }
+    }
   }
 
   /// Called at slide boundaries to apply a prefetched playlist without cutting mid-item.

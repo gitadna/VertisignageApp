@@ -175,6 +175,7 @@ class AnnouncementCommand extends RealtimeCommand {
     this.scheduleEndsAtUtc,
     this.pushedAtUtc,
     this.resumePreviousPlayback = false,
+    this.presentationUrgency,
   });
 
   final String announcementId;
@@ -195,6 +196,8 @@ class AnnouncementCommand extends RealtimeCommand {
   /// Last push time from server — used for overlap resolution (latest wins).
   final DateTime? pushedAtUtc;
   final bool resumePreviousPlayback;
+  /// Wire: `alarm` for high-priority announcement (native show-over-lock hints).
+  final String? presentationUrgency;
 }
 
 class AnnouncementTransportCommand extends RealtimeCommand {
@@ -512,6 +515,7 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
         final scheduleEndsRaw = payload['scheduleEndsAt'] as String?;
         final pushedAtRaw = payload['pushedAt'] as String?;
         final resumePreviousPlayback = payload['resumePreviousPlayback'] == true;
+        final urg = (payload['presentationUrgency'] as String?)?.toLowerCase().trim();
         return AnnouncementCommand(
           announcementId: aid,
           title: (title == null || title.isEmpty) ? 'Announcement' : title,
@@ -528,6 +532,8 @@ RealtimeCommand? parseRealtimeCommand(String raw) {
               scheduleEndsRaw != null ? DateTime.tryParse(scheduleEndsRaw)?.toUtc() : null,
           pushedAtUtc: pushedAtRaw != null ? DateTime.tryParse(pushedAtRaw)?.toUtc() : null,
           resumePreviousPlayback: resumePreviousPlayback,
+          presentationUrgency:
+              urg == 'alarm' || urg == 'normal' ? urg : null,
         );
       case 'ANNOUNCEMENT_TRANSPORT':
         if (payload is! Map<String, dynamic>) return null;

@@ -115,6 +115,7 @@ class MainActivity : FlutterActivity() {
                         val opacity = call.argument<Double>("opacity") ?: 0.9
                         val scheduleEndsAtEpochMs =
                             call.argument<Number>("scheduleEndsAtEpochMs")?.toLong() ?: 0L
+                        val alarmPresentation = call.argument<Boolean>("alarmPresentation") == true
                         result.success(
                             showOverlay(
                                 text = text,
@@ -124,6 +125,7 @@ class MainActivity : FlutterActivity() {
                                 durationSec = durationSec,
                                 opacity = opacity,
                                 scheduleEndsAtEpochMs = scheduleEndsAtEpochMs,
+                                alarmPresentation = alarmPresentation,
                             ),
                         )
                     }
@@ -184,6 +186,29 @@ class MainActivity : FlutterActivity() {
                     }
                     "moveTaskToBack" -> {
                         result.success(moveTaskToRoot())
+                    }
+                    "schedulePlaylistBoundaryAlarm" -> {
+                        val epochMs = (call.argument<Any>("epochMs") as? Number)?.toLong() ?: 0L
+                        result.success(
+                            if (epochMs > 0L) {
+                                PlaylistScheduleAlarm.schedule(this, epochMs)
+                            } else {
+                                false
+                            },
+                        )
+                    }
+                    "cancelPlaylistBoundaryAlarm" -> {
+                        PlaylistScheduleAlarm.cancel(this)
+                        result.success(true)
+                    }
+                    "canScheduleExactAlarms" -> {
+                        result.success(PlaylistScheduleAlarm.canScheduleExactAlarms(this))
+                    }
+                    "openExactAlarmSettings" -> {
+                        result.success(openExactAlarmSettings())
+                    }
+                    "prepareManagedClassroomMode" -> {
+                        result.success(policyManager.applyManagedClassroomPolicies())
                     }
                     else -> result.notImplemented()
                 }
@@ -557,6 +582,8 @@ class MainActivity : FlutterActivity() {
     private fun enforceKioskIfDeviceOwner() {
         try {
             if (!policyManager.isDeviceOwner()) return
+            // Teacher / classroom mode: never hijack the screen with lock task.
+            if (ForegroundWakePolicy.isRelaxedTeacherMode(applicationContext)) return
             policyManager.applyKioskPolicies()
             if (!policyManager.isInLockTask()) {
                 policyManager.enterLockTask(this)
@@ -604,6 +631,23 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun openExactAlarmSettings(): Boolean =
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                startActivity(
+                    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                        data = Uri.parse("package:$packageName")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    },
+                )
+                true
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
+
     private fun showOverlay(
         text: String,
         mediaUrl: String?,
@@ -612,8 +656,10 @@ class MainActivity : FlutterActivity() {
         durationSec: Int,
         opacity: Double,
         scheduleEndsAtEpochMs: Long = 0L,
+        alarmPresentation: Boolean = false,
     ): Boolean {
         if (!canDrawOverlays()) return false
+        ForegroundWakePolicy.syncPresentationState(applicationContext, true)
         val shown = CommandRelay.showOverlay(
             context = this,
             text = text,
@@ -623,6 +669,7 @@ class MainActivity : FlutterActivity() {
             durationSec = durationSec,
             opacity = opacity,
             scheduleEndEpochMs = scheduleEndsAtEpochMs,
+            alarmPresentation = alarmPresentation,
         )
         if (shown) {
             wakeApp()

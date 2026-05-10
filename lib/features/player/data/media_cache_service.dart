@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../core/constants/storage_keys.dart';
 import '../../../core/storage/local_storage.dart';
 import '../../../models/playlist_item.dart';
+import 'playback_perf_telemetry.dart';
 
 /// Downloads remote images/videos into app support storage; memoizes URL → path.
 /// URL-type playlist rows skip downloads (handled only in [prefetchAndFilter]).
@@ -20,13 +21,12 @@ class MediaCacheService {
     LocalStorage? persistentStorage,
     String? apiBaseUrl,
     this.maxCacheMb = 400,
-  }) : _dio = downloadClient ??
+  }) :         _dio = downloadClient ??
             Dio(
               BaseOptions(
                 baseUrl: (apiBaseUrl ?? '').trim(),
                 connectTimeout: const Duration(seconds: 45),
                 receiveTimeout: const Duration(minutes: 15),
-                responseType: ResponseType.bytes,
               ),
             ),
         _persistentStorage = persistentStorage;
@@ -41,7 +41,6 @@ class MediaCacheService {
   final Map<String, int> _lastAccessEpochMs = {};
 
   Directory? _cacheDir;
-  bool _lruHydrated = false;
   int? _trackedTotalBytes;
   bool _ledgerHydrated = false;
 
@@ -62,7 +61,6 @@ class MediaCacheService {
     _ledgerHydrated = true;
     final storage = _persistentStorage;
     if (storage == null) {
-      _lruHydrated = true;
       return;
     }
     try {
@@ -93,7 +91,6 @@ class MediaCacheService {
         debugPrint('MediaCacheService hydrate: $e\n$st');
       }
     }
-    _lruHydrated = true;
   }
 
   Future<void> _persistLruToDisk() async {
@@ -220,14 +217,40 @@ class MediaCacheService {
     }
   }
 
+  String _mediaKindBucketForUrl(String url) {
+    final lower = url.toLowerCase();
+    if (lower.contains('.mp4') ||
+        lower.contains('.webm') ||
+        lower.contains('.mov')) {
+      return 'video';
+    }
+    if (lower.contains('.png') ||
+        lower.contains('.jpg') ||
+        lower.contains('.jpeg') ||
+        lower.contains('.webp') ||
+        lower.contains('.gif')) {
+      return 'image';
+    }
+    return 'file';
+  }
+
   /// Returns a local file path for [url], or `null` after one retry if download fails.
   Future<String?> resolveLocalPath(String url) async {
     final trimmed = url.trim();
     if (trimmed.isEmpty) return null;
 
+    final sw = Stopwatch()..start();
+    final bucket = _mediaKindBucketForUrl(trimmed);
+
     final cached = _pathByUrl[trimmed];
     if (cached != null && await File(cached).exists()) {
       _touchPath(cached);
+      sw.stop();
+      PlaybackPerfTelemetry.mediaResolve(
+        cacheHit: true,
+        elapsedMs: sw.elapsedMilliseconds,
+        mediaKindBucket: bucket,
+      );
       return cached;
     }
     _pathByUrl.remove(trimmed);
@@ -236,13 +259,22 @@ class MediaCacheService {
 
     var path = await attempt();
     path ??= await attempt();
+    sw.stop();
     if (path != null) {
       _pathByUrl[trimmed] = path;
+      PlaybackPerfTelemetry.mediaResolve(
+        cacheHit: false,
+        elapsedMs: sw.elapsedMilliseconds,
+        mediaKindBucket: bucket,
+      );
+    } else {
+      PlaybackPerfTelemetry.mediaResolveFailed(mediaKindBucket: bucket);
     }
     return path;
   }
 
   Future<String?> _downloadToFile(String url) async {
+    File? tempFile;
     try {
       final resolvedUrl = _resolveReachableUrl(url);
       final uri = Uri.tryParse(resolvedUrl);
@@ -255,29 +287,90 @@ class MediaCacheService {
       final canResolveRelative = !isAbsolute && base.isNotEmpty;
       if (!isAbsolute && !canResolveRelative) return null;
 
-      final response = await _dio.get<List<int>>(
-        resolvedUrl,
-        options: Options(responseType: ResponseType.bytes),
-      );
+      var reservedLen = 32 * 1024 * 1024;
+      try {
+        final head = await _dio.head(
+          resolvedUrl,
+          options: Options(
+            followRedirects: true,
+            validateStatus: (s) => s != null && s < 500,
+          ),
+        );
+        final cl = head.headers.value('content-length');
+        final parsed = cl != null ? int.tryParse(cl) : null;
+        if (parsed != null && parsed > 0) {
+          reservedLen = parsed;
+        }
+      } catch (_) {
+        // Optional HEAD; fall back to conservative reservation.
+      }
 
-      final bytes = response.data;
-      if (bytes == null || bytes.isEmpty) return null;
-
-      final len = bytes.length;
-      await _ensureSpaceForIncomingBytes(len);
+      await _ensureSpaceForIncomingBytes(reservedLen);
 
       final dir = await _directory();
       final name = _fileNameForUrl(url);
-      final file = File(p.join(dir.path, name));
-      await file.writeAsBytes(bytes, flush: true);
-      if (!await file.exists()) return null;
+      final finalPath = p.join(dir.path, name);
+      final tempPath = '$finalPath.part';
+      tempFile = File(tempPath);
+      if (await tempFile.exists()) {
+        try {
+          await tempFile.delete();
+        } catch (_) {}
+      }
+
+      await _dio.download(
+        resolvedUrl,
+        tempPath,
+        deleteOnError: true,
+        options: Options(followRedirects: true),
+      );
+
+      if (!await tempFile.exists()) return null;
+      var len = await tempFile.length();
+      if (len <= 0) {
+        try {
+          await tempFile.delete();
+        } catch (_) {}
+        return null;
+      }
+
+      await _ensureSpaceForIncomingBytes(len);
+
+      final dest = File(finalPath);
+      if (await dest.exists()) {
+        try {
+          final oldLen = await dest.length();
+          await dest.delete();
+          if (_trackedTotalBytes != null) {
+            _trackedTotalBytes = (_trackedTotalBytes! - oldLen).clamp(0, 1 << 62);
+            unawaited(_persistTrackedTotalBytes());
+          }
+        } catch (_) {}
+      }
+
+      await tempFile.rename(finalPath);
+      tempFile = null;
+
+      if (!await dest.exists()) return null;
+      len = await dest.length();
+      if (len <= 0) {
+        try {
+          await dest.delete();
+        } catch (_) {}
+        return null;
+      }
 
       _trackedTotalBytes = (_trackedTotalBytes ?? 0) + len;
       unawaited(_persistTrackedTotalBytes());
-      _touchPath(file.path);
+      _touchPath(dest.path);
       await _enforceBudgetIfNeeded();
-      return file.path;
+      return dest.path;
     } catch (e, st) {
+      if (tempFile != null && await tempFile.exists()) {
+        try {
+          await tempFile.delete();
+        } catch (_) {}
+      }
       if (kDebugMode) {
         debugPrint('MediaCacheService: failed for $url — $e\n$st');
       }
@@ -339,7 +432,6 @@ class MediaCacheService {
     _pathByUrl.clear();
     _lastAccessEpochMs.clear();
     _trackedTotalBytes = 0;
-    _lruHydrated = false;
     try {
       final storage = _persistentStorage;
       if (storage != null) {
@@ -418,24 +510,44 @@ class MediaCacheService {
     }
   }
 
+  Future<PlaylistItem?> _prefetchOne(PlaylistItem item) async {
+    if (item.mediaKind == PlaylistMediaKind.url) {
+      final uri = Uri.tryParse(item.url.trim());
+      if (uri != null &&
+          uri.hasAuthority &&
+          (uri.isScheme('https') || uri.isScheme('http'))) {
+        return item;
+      }
+      return null;
+    }
+    final path = await resolveLocalPath(item.url);
+    return path != null ? item : null;
+  }
+
   /// Ensures each asset is cached where needed. URL slides pass http(s) validation only.
+  /// File assets prefetch with bounded parallelism (batch size 3) while preserving order.
   Future<List<PlaylistItem>> prefetchAndFilter(List<PlaylistItem> items) async {
+    final sw = Stopwatch()..start();
+    const batchSize = 3;
     final ready = <PlaylistItem>[];
-    for (final item in items) {
-      if (item.mediaKind == PlaylistMediaKind.url) {
-        final uri = Uri.tryParse(item.url.trim());
-        if (uri != null &&
-            uri.hasAuthority &&
-            (uri.isScheme('https') || uri.isScheme('http'))) {
-          ready.add(item);
-        }
-      } else {
-        final path = await resolveLocalPath(item.url);
-        if (path != null) {
-          ready.add(item);
+    var i = 0;
+    while (i < items.length) {
+      final end = i + batchSize > items.length ? items.length : i + batchSize;
+      final batch = items.sublist(i, end);
+      final results = await Future.wait(batch.map(_prefetchOne));
+      for (final r in results) {
+        if (r != null) {
+          ready.add(r);
         }
       }
+      i = end;
     }
+    sw.stop();
+    PlaybackPerfTelemetry.prefetchRound(
+      itemCount: items.length,
+      elapsedMs: sw.elapsedMilliseconds,
+      readyCount: ready.length,
+    );
     return ready;
   }
 }

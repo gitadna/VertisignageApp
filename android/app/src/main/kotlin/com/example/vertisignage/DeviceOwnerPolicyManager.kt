@@ -56,6 +56,13 @@ class DeviceOwnerPolicyManager(private val context: Context) {
         }
     }
 
+    /**
+     * Classroom / multi-app mode on a Device Owner–provisioned tablet: release strict kiosk
+     * restrictions so teachers can use other apps while VertiSignage stays installed as DO app.
+     * Does not enter lock task (pair with Flutter `kioskLockTask == false`).
+     */
+    fun applyManagedClassroomPolicies(): Boolean = clearKioskPolicies()
+
     fun enterLockTask(activity: Activity): Boolean {
         return try {
             if (!applyKioskPolicies()) {

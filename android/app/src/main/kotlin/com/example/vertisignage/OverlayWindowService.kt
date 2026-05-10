@@ -62,6 +62,7 @@ class OverlayWindowService : Service() {
                 val durationSec = intent.getIntExtra(EXTRA_DURATION_SEC, 10)
                 val opacity = intent.getDoubleExtra(EXTRA_OPACITY, 0.9)
                 val scheduleEndEpochMs = intent.getLongExtra(EXTRA_SCHEDULE_END_EPOCH_MS, 0L)
+                val alarmPresentation = intent.getBooleanExtra(EXTRA_ALARM_PRESENTATION, false)
                 showOverlay(
                     message = text.ifBlank { "VertiSignage" },
                     mediaUrl = mediaUrl,
@@ -70,6 +71,7 @@ class OverlayWindowService : Service() {
                     durationSec = durationSec,
                     opacity = opacity.toFloat(),
                     scheduleEndEpochMs = scheduleEndEpochMs,
+                    alarmPresentation = alarmPresentation,
                 )
                 START_STICKY
             }
@@ -142,6 +144,7 @@ class OverlayWindowService : Service() {
         durationSec: Int,
         opacity: Float,
         scheduleEndEpochMs: Long,
+        alarmPresentation: Boolean,
     ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             !Settings.canDrawOverlays(this)
@@ -151,7 +154,7 @@ class OverlayWindowService : Service() {
             CommandRelay.wakeApp(this)
             return
         }
-        val bgOpacity = (opacity.coerceIn(0.5f, 1f) * 255).toInt()
+        val bgOpacity = (opacity.coerceIn(0f, 1f) * 255).toInt()
         if (overlayRoot != null) {
             overlayText?.text = message
             overlayRoot?.setBackgroundColor(Color.argb(bgOpacity, 0, 0, 0))
@@ -236,13 +239,21 @@ class OverlayWindowService : Service() {
             else
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE
+        var winFlags =
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        if (alarmPresentation) {
+            winFlags =
+                winFlags or
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        }
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            winFlags,
             PixelFormat.TRANSLUCENT,
         )
         params.gravity = Gravity.TOP or Gravity.START
@@ -429,6 +440,7 @@ class OverlayWindowService : Service() {
         const val EXTRA_DURATION_SEC = "durationSec"
         const val EXTRA_OPACITY = "opacity"
         const val EXTRA_SCHEDULE_END_EPOCH_MS = "scheduleEndEpochMs"
+        const val EXTRA_ALARM_PRESENTATION = "alarmPresentation"
         private const val TAG = "VertiSignageBG"
     }
 

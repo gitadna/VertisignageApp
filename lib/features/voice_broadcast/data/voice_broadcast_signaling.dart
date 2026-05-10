@@ -24,9 +24,15 @@ class VoiceBroadcastSignaling {
   final StreamController<void> _connectedController =
       StreamController<void>.broadcast();
 
+  DateTime? _lastConnectErrorLoggedAt;
+  String? _lastConnectErrorDigest;
+
   Stream<StreamInviteEnvelope> get invites => _invitesController.stream;
   Stream<String> get stops => _stopsController.stream;
   Stream<void> get connected => _connectedController.stream;
+
+  /// True when Socket.IO reports an active connection (used to slow REST fallback polling when down).
+  bool get isSocketConnected => _socket?.connected ?? false;
 
   String _socketBaseUrl() {
     final raw = _env.apiBaseUrl.trim();
@@ -37,6 +43,20 @@ class VoiceBroadcastSignaling {
       return raw.substring(0, raw.length - 5);
     }
     return raw;
+  }
+
+  void _maybeLogConnectError(dynamic err) {
+    final now = DateTime.now();
+    final digest = err.toString();
+    final lastAt = _lastConnectErrorLoggedAt;
+    if (lastAt != null &&
+        digest == _lastConnectErrorDigest &&
+        now.difference(lastAt) < const Duration(seconds: 45)) {
+      return;
+    }
+    _lastConnectErrorLoggedAt = now;
+    _lastConnectErrorDigest = digest;
+    KioskLog.w('voice_signal', 'socket_connect_error: $digest');
   }
 
   void connect() {
@@ -54,6 +74,10 @@ class VoiceBroadcastSignaling {
             'Authorization': token.startsWith('Bearer ') ? token : 'Bearer $token',
           })
           .enableReconnection()
+          .setReconnectionAttempts(48)
+          .setReconnectionDelay(2000)
+          .setReconnectionDelayMax(60000)
+          .setRandomizationFactor(0.5)
           .build(),
     );
     socket.onConnect((_) {
@@ -64,7 +88,7 @@ class VoiceBroadcastSignaling {
       KioskLog.event('voice_signal', 'socket_disconnected');
     });
     socket.onConnectError((dynamic err) {
-      KioskLog.e('voice_signal', 'socket_connect_error: $err');
+      _maybeLogConnectError(err);
     });
     socket.on('stream:invite', (dynamic data) {
       KioskLog.event(
@@ -135,6 +159,8 @@ class VoiceBroadcastSignaling {
   }
 
   void disconnect() {
+    _lastConnectErrorLoggedAt = null;
+    _lastConnectErrorDigest = null;
     _socket?.disconnect();
     _socket?.dispose();
     _socket = null;

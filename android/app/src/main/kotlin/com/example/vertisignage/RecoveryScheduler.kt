@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.example.vertisignage.BuildConfig
 import androidx.work.BackoffPolicy
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -14,6 +15,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 object RecoveryScheduler {
     private const val TAG = "VertiSignageBG"
@@ -22,20 +24,39 @@ object RecoveryScheduler {
     private const val UNIQUE_WORK_PERIODIC = "vertisignage_recovery_periodic"
 
     private const val KEY_REASON = "reason"
+
+    /** One PendingIntent for all recovery wakeup alarms — rescheduling replaces instead of stacking. */
+    private const val RECOVERY_ALARM_REQUEST_CODE = 22100
+
+    private const val NON_CRITICAL_COOLDOWN_MS = 45_000L
+
+    private val lastNonCriticalEnqueueAt = AtomicLong(0L)
+
     /**
      * Enqueue a unique one-shot recovery attempt. Safe to call frequently.
      */
     fun enqueueNow(context: Context, reason: String) {
+        val critical = isCriticalReason(reason)
+        val nowMs = System.currentTimeMillis()
+        if (!critical) {
+            val last = lastNonCriticalEnqueueAt.get()
+            if (last != 0L && nowMs - last < NON_CRITICAL_COOLDOWN_MS) {
+                logDebugSkip("recovery_enqueue_now_throttled elapsedMs=${nowMs - last} reason=$reason")
+                return
+            }
+        }
+
         try {
             val request =
                 OneTimeWorkRequestBuilder<RecoveryWorker>()
                     .setInputData(workDataOf(KEY_REASON to reason))
                     .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                     .build()
-            val workPolicy = if (isCriticalReason(reason)) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
+            val workPolicy = if (critical) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
             WorkManager.getInstance(context)
                 .enqueueUniqueWork(UNIQUE_WORK_NOW, workPolicy, request)
             scheduleAlarmFallback(context, "now:$reason", 60_000L)
+            if (!critical) lastNonCriticalEnqueueAt.set(nowMs)
             log("recovery_enqueue_now", "ok reason=$reason")
         } catch (t: Throwable) {
             log("recovery_enqueue_now", "failed ${t::class.java.simpleName}:${t.message} reason=$reason", Log.WARN)
@@ -70,7 +91,7 @@ object RecoveryScheduler {
             }
             val pi = PendingIntent.getBroadcast(
                 context,
-                alarmRequestCode(reason),
+                RECOVERY_ALARM_REQUEST_CODE,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
@@ -86,18 +107,21 @@ object RecoveryScheduler {
         }
     }
 
-    private fun isCriticalReason(reason: String): Boolean {
+    /**
+     * Only replace in-flight WM work when an immediate takeover is warranted (avoid GreedyScheduler churn).
+     */
+    internal fun isCriticalReason(reason: String): Boolean {
         val lower = reason.lowercase()
-        return lower.contains("boot") ||
-            lower.contains("alarm") ||
-            lower.contains("push") ||
-            lower.contains("overlay") ||
-            lower.contains("native_crash")
+        if (lower.contains("native_crash")) return true
+        // Prefer token boundaries so "reboot" does not match "boot".
+        if (lower.startsWith("boot") || lower.contains(":boot")) return true
+        if (lower.startsWith("push") || lower.contains(":push")) return true
+        if (lower.startsWith("overlay") || lower.contains(":overlay")) return true
+        return false
     }
 
-    private fun alarmRequestCode(reason: String): Int {
-        val seed = reason.hashCode().toLong().let { kotlin.math.abs(it) }
-        return 22000 + (seed % 400).toInt()
+    private fun logDebugSkip(message: String) {
+        if (BuildConfig.DEBUG) Log.d(TAG, "$message source=RecoveryScheduler")
     }
 
     private fun log(event: String, msg: String, level: Int = Log.INFO) {
@@ -109,11 +133,12 @@ object RecoveryScheduler {
                 append(" manufacturer=").append(Build.MANUFACTURER ?: "unknown")
                 append(" msg=").append(msg)
             }
-        when (level) {
-            Log.WARN -> Log.w(TAG, out)
-            Log.ERROR -> Log.e(TAG, out)
-            else -> Log.i(TAG, out)
+        when {
+            level == Log.WARN -> Log.w(TAG, out)
+            level == Log.ERROR -> Log.e(TAG, out)
+            BuildConfig.DEBUG -> Log.d(TAG, out)
+            else -> { /* Routine recovery noise omitted in release prod logcat */
+            }
         }
     }
 }
-

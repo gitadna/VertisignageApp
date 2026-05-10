@@ -31,6 +31,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   bool _overlayOk = false;
   bool _batteryOk = false;
   bool _notificationOk = false;
+
   /// Device Owner: overlay recommended only. Consumer/sideload: overlay required to continue.
   bool _overlayRequiredForContinue = true;
   int _androidSdk = 0;
@@ -43,8 +44,11 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   bool _oemBackgroundLaunchConfirmed = false;
   bool _recentsLockConfirmed = false;
 
-  bool get _notificationsApplicable =>
-      Platform.isAndroid && _androidSdk >= 33;
+  bool get _notificationsApplicable => Platform.isAndroid && _androidSdk >= 33;
+
+  bool get _exactAlarmApplicable => Platform.isAndroid && _androidSdk >= 31;
+
+  bool _exactAlarmOk = true;
 
   bool get _canContinue =>
       (_overlayOk || !_overlayRequiredForContinue) &&
@@ -90,10 +94,10 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
 
     final done =
         _storage.getString(
-              StorageKeys.deviceBox,
-              StorageKeys.kioskPowerSetupComplete,
-            ) ==
-            '1';
+          StorageKeys.deviceBox,
+          StorageKeys.kioskPowerSetupComplete,
+        ) ==
+        '1';
     if (done) {
       unawaited(_kickRecovery('gate_done_shortcircuit'));
       setState(() {
@@ -174,11 +178,16 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
     if (_notificationsApplicable) {
       notification = await Permission.notification.isGranted;
     }
+    bool exactAlarm = true;
+    if (_exactAlarmApplicable) {
+      exactAlarm = await _device.canScheduleExactAlarms();
+    }
     if (!mounted) return;
     void apply() {
       _overlayOk = overlay;
       _batteryOk = battery;
       _notificationOk = notification;
+      _exactAlarmOk = exactAlarm;
       _deviceOwner = owner;
       _overlayRequiredForContinue = !_deviceOwner;
     }
@@ -200,6 +209,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
 
   Future<void> _onContinue() async {
     await _refreshPermissionState();
+    if (!mounted) return;
     if (_canContinue) {
       if (!_oemBackgroundLaunchConfirmed || !_recentsLockConfirmed) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -223,9 +233,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text(
-          'Enable auto-start for admin restart.',
-        ),
+        content: Text('Enable auto-start for admin restart.'),
         duration: Duration(seconds: 3),
       ),
     );
@@ -238,9 +246,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Background restart support'),
-        content: const Text(
-          'Turn on auto-start, then tap Enabled.',
-        ),
+        content: const Text('Turn on auto-start, then tap Enabled.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -296,6 +302,13 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
     await _refreshPermissionState();
   }
 
+  Future<void> _requestExactAlarm() async {
+    if (!_exactAlarmApplicable) return;
+    await Permission.scheduleExactAlarm.request();
+    await _device.openExactAlarmSettings();
+    await _refreshPermissionState();
+  }
+
   Future<void> _openAutoStartSettings() async {
     await _device.openAutoStartSettings();
   }
@@ -328,10 +341,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text(
-                        'Permissions',
-                        style: theme.textTheme.headlineSmall,
-                      ),
+                      Text('Permissions', style: theme.textTheme.headlineSmall),
                       if (_bootRecoveryPending) ...[
                         const SizedBox(height: 12),
                         Card(
@@ -354,16 +364,16 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                                       : 'Open the app once after reboot/update to allow safe auto-start.',
                                   style: theme.textTheme.bodyMedium,
                                 ),
-                                if (_bootRecoveryReason != null) ...[
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'Reason: $_bootRecoveryReason',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color:
-                                          theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
+                                // if (_bootRecoveryReason != null) ...[
+                                //   const SizedBox(height: 6),
+                                //   Text(
+                                //     'Reason: $_bootRecoveryReason',
+                                //     style: theme.textTheme.bodySmall?.copyWith(
+                                //       color:
+                                //           theme.colorScheme.onSurfaceVariant,
+                                //     ),
+                                //   ),
+                                // ],
                                 const SizedBox(height: 12),
                                 OutlinedButton(
                                   onPressed: _clearBootPending,
@@ -458,6 +468,18 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                           onRequest: _requestNotification,
                         ),
                       ],
+                      if (_exactAlarmApplicable) ...[
+                        const SizedBox(height: 16),
+                        _PermissionRow(
+                          title: 'Alarms & reminders (exact)',
+                          subtitle:
+                              'Recommended so playlist schedule boundaries fire on time when Doze or OEMs delay in-app timers.',
+                          ok: _exactAlarmOk,
+                          requiredForContinue: false,
+                          requestButtonLabel: 'Allow exact alarms',
+                          onRequest: _requestExactAlarm,
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       _AutoStartTipCard(
                         onOpenSettings: _openAutoStartSettings,
@@ -465,9 +487,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                             _oemBackgroundLaunchConfirmed,
                         recentsLockConfirmed: _recentsLockConfirmed,
                         onToggleOemBackgroundLaunch: (value) {
-                          setState(
-                            () => _oemBackgroundLaunchConfirmed = value,
-                          );
+                          setState(() => _oemBackgroundLaunchConfirmed = value);
                         },
                         onToggleRecentsLock: (value) {
                           setState(() => _recentsLockConfirmed = value);
@@ -606,7 +626,9 @@ class _AutoStartTipCard extends StatelessWidget {
               value: oemBackgroundLaunchConfirmed,
               onChanged: (value) => onToggleOemBackgroundLaunch(value ?? false),
               title: const Text('OEM auto-start / background launch enabled'),
-              subtitle: const Text('Required on many phones for reboot recovery.'),
+              subtitle: const Text(
+                'Required on many phones for reboot recovery.',
+              ),
             ),
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,

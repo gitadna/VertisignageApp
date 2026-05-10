@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -18,6 +19,7 @@ import 'kiosk_fleet_api.dart';
 import 'media_cache_service.dart';
 import 'ota_update_service.dart';
 import 'player_telemetry.dart';
+import 'playback_perf_telemetry.dart';
 import 'playlist_sync_service.dart';
 import '../presentation/player_controller.dart';
 import '../../realtime_push/data/realtime_push_notifier.dart';
@@ -129,15 +131,31 @@ class RealtimeDispatcher {
     return WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
   }
 
-  /// Best-effort foreground bring-up for realtime push (no native overlay
-  /// fallback because realtime pushes are full-screen takeovers rendered
-  /// by the Flutter UI itself).
-  Future<bool> _ensureForeground() async {
-    final state = WidgetsBinding.instance.lifecycleState;
-    if (state == null || state == AppLifecycleState.resumed) return true;
-    final launchDispatched = await _device.wakeAppToForeground();
-    if (!launchDispatched) return false;
-    return await _waitForForeground();
+  /// Tighter polling than [_waitForForeground] so realtime push wakes feel snappier.
+  Future<bool> _waitForForegroundRealtime() async {
+    const timeout = Duration(milliseconds: 2500);
+    const poll = Duration(milliseconds: 60);
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final state = WidgetsBinding.instance.lifecycleState;
+      if (state == null || state == AppLifecycleState.resumed) {
+        return true;
+      }
+      await Future<void>.delayed(poll);
+    }
+    return WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+  }
+
+  /// After realtime push, announcement, or boundary sync (non–lock-task Android).
+  Future<void> _afterOptionalMinimize() async {
+    await _device.hideOverlay();
+    // Strict kiosk must stay foreground; same policy as [ForegroundPresentationCoordinator].
+    if (!Platform.isAndroid || _env.kioskLockTask) return;
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    final ok = await _device.moveTaskToBack();
+    if (ok == false) {
+      PlaybackPerfTelemetry.moveTaskToBackDenied();
+    }
   }
 
   int? _scheduleEndsEpochMs(DateTime? utc) {
@@ -152,9 +170,68 @@ class RealtimeDispatcher {
     required bool untilDismissed,
     required int durationSec,
     required int? scheduleEndsAtEpochMs,
+    bool solidBackdropFastWake = false,
+    bool alarmPresentation = false,
   }) async {
+    if (!solidBackdropFastWake) {
+      final resumedState = WidgetsBinding.instance.lifecycleState;
+      if (resumedState == null || resumedState == AppLifecycleState.resumed) {
+        await _device.hideOverlay();
+        return <String, dynamic>{
+          'path': 'already_foreground',
+          'launchDispatched': true,
+          'lifecycleState': resumedState?.name ?? 'unknown',
+        };
+      }
+      final launchDispatched = await _device.wakeAppToForeground();
+      final resumed = launchDispatched && await _waitForForeground();
+      final lifecycle = WidgetsBinding.instance.lifecycleState?.name ?? 'unknown';
+      if (resumed) {
+        await _device.hideOverlay();
+        return <String, dynamic>{
+          'path': 'wake_foreground',
+          'launchDispatched': launchDispatched,
+          'lifecycleState': lifecycle,
+        };
+      }
+      final overlayShown = await _device.showOverlay(
+        text: text,
+        mediaUrl: mediaUrl,
+        mediaKind: mediaKind,
+        untilDismissed: untilDismissed,
+        durationSec: durationSec,
+        scheduleEndsAtEpochMs: scheduleEndsAtEpochMs,
+        alarmPresentation: alarmPresentation,
+      );
+      return <String, dynamic>{
+        'path': overlayShown ? 'native_overlay_fallback' : 'wake_failed_overlay_failed',
+        'launchDispatched': launchDispatched,
+        'lifecycleState': lifecycle,
+        'nativeOverlayShown': overlayShown,
+      };
+    }
+
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state == null || state == AppLifecycleState.resumed) {
+      await _device.hideOverlay();
+      return <String, dynamic>{
+        'path': 'already_foreground',
+        'launchDispatched': true,
+        'lifecycleState': state?.name ?? 'unknown',
+      };
+    }
+
+    await _device.showOverlay(
+      text: ' ',
+      untilDismissed: false,
+      durationSec: durationSec,
+      opacity: 1.0,
+      scheduleEndsAtEpochMs: null,
+      alarmPresentation: alarmPresentation,
+    );
+
     final launchDispatched = await _device.wakeAppToForeground();
-    final resumed = launchDispatched && await _waitForForeground();
+    final resumed = launchDispatched && await _waitForForegroundRealtime();
     final lifecycle = WidgetsBinding.instance.lifecycleState?.name ?? 'unknown';
     if (resumed) {
       await _device.hideOverlay();
@@ -164,13 +241,17 @@ class RealtimeDispatcher {
         'lifecycleState': lifecycle,
       };
     }
+
+    await _device.hideOverlay();
     final overlayShown = await _device.showOverlay(
       text: text,
       mediaUrl: mediaUrl,
       mediaKind: mediaKind,
       untilDismissed: untilDismissed,
       durationSec: durationSec,
+      opacity: 1.0,
       scheduleEndsAtEpochMs: scheduleEndsAtEpochMs,
+      alarmPresentation: alarmPresentation,
     );
     return <String, dynamic>{
       'path': overlayShown ? 'native_overlay_fallback' : 'wake_failed_overlay_failed',
@@ -195,20 +276,31 @@ class RealtimeDispatcher {
       return true;
     }
 
+    // Solid black full-screen immediately while we try to foreground the Flutter UI.
+    await _device.showOverlay(
+      text: ' ',
+      untilDismissed: false,
+      durationSec: durationSec,
+      opacity: 1.0,
+      scheduleEndsAtEpochMs: null,
+    );
+
     final launchDispatched = await _device.wakeAppToForeground();
-    final resumed = launchDispatched && await _waitForForeground();
+    final resumed = launchDispatched && await _waitForForegroundRealtime();
     if (resumed) {
       await _device.hideOverlay();
       return true;
     }
 
-    // Native overlay ensures operators still see something even if the app cannot foreground.
+    await _device.hideOverlay();
+    // Native overlay with content if we cannot resume; solid black backing.
     await _device.showOverlay(
       text: text,
       mediaUrl: mediaUrl,
       mediaKind: mediaKind,
       untilDismissed: false,
       durationSec: durationSec,
+      opacity: 1.0,
       scheduleEndsAtEpochMs: null,
     );
     return false;
@@ -268,11 +360,14 @@ class RealtimeDispatcher {
   }
 
   VoidCallback _announcementDismissHandler({required bool resumePreviousPlayback}) {
-    if (!resumePreviousPlayback) return _player.endAnnouncementHold;
     return () {
-      _player.endAnnouncementHold();
-      // Refresh right after instant content ends so prior playlist/schedule context resumes quickly.
-      unawaited(_playlistSync.sync(forceCommit: true));
+      if (resumePreviousPlayback) {
+        _player.endAnnouncementHold();
+        unawaited(_playlistSync.sync(forceCommit: true));
+      } else {
+        _player.endAnnouncementHold();
+      }
+      unawaited(_afterOptionalMinimize());
     };
   }
 
@@ -413,12 +508,20 @@ class RealtimeDispatcher {
     if (cmd is PlaylistUpdatedCommand) {
       final forceCommitNow =
           cmd.forceImmediate && !_player.announcementHold.value;
+      if (cmd.forceImmediate && !_player.announcementHold.value) {
+        await _device.wakeAppToForeground();
+        await _waitForForegroundRealtime();
+      }
       await _playlistSync.sync(forceCommit: forceCommitNow);
       return;
     }
     if (cmd is SyncRequestCommand) {
       final forceCommitNow =
           cmd.forceImmediate && !_player.announcementHold.value;
+      if (cmd.forceImmediate && !_player.announcementHold.value) {
+        await _device.wakeAppToForeground();
+        await _waitForForegroundRealtime();
+      }
       await _playlistSync.sync(forceCommit: forceCommitNow);
       return;
     }
@@ -451,6 +554,8 @@ class RealtimeDispatcher {
           untilDismissed: cmd.untilDismissed,
           durationSec: cmd.durationSec,
           scheduleEndsAtEpochMs: _scheduleEndsEpochMs(cmd.scheduleEndsAtUtc),
+          solidBackdropFastWake: true,
+          alarmPresentation: cmd.presentationUrgency == 'alarm',
         );
         KioskLog.event(
           'takeover',
@@ -540,6 +645,7 @@ class RealtimeDispatcher {
             // Refresh once after the push so any playlist/schedule changes
             // that happened during the takeover are picked up promptly.
             unawaited(_playlistSync.sync(forceCommit: true));
+            unawaited(_afterOptionalMinimize());
           },
         );
       } else {
@@ -547,6 +653,7 @@ class RealtimeDispatcher {
         unawaited(Future<void>.delayed(Duration(seconds: durationSec)).then((_) async {
           _player.endAnnouncementHold();
           await _playlistSync.sync(forceCommit: true);
+          await _afterOptionalMinimize();
         }));
       }
 

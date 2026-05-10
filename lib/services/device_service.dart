@@ -317,6 +317,64 @@ class DeviceService {
     }
   }
 
+  /// Native exact alarm as a belt-and-suspenders complement to the in-process boundary [Timer].
+  Future<bool> schedulePlaylistBoundaryAlarm({required int epochMs}) async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final ok = await _device.invokeMethod<bool>(
+        'schedulePlaylistBoundaryAlarm',
+        <String, dynamic>{'epochMs': epochMs},
+      );
+      return ok ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.schedulePlaylistBoundaryAlarm', e, st);
+      return false;
+    }
+  }
+
+  Future<void> cancelPlaylistBoundaryAlarm() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _device.invokeMethod<void>('cancelPlaylistBoundaryAlarm');
+    } catch (e, st) {
+      KioskLog.e('DeviceService.cancelPlaylistBoundaryAlarm', e, st);
+    }
+  }
+
+  Future<bool> canScheduleExactAlarms() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final ok = await _device.invokeMethod<bool>('canScheduleExactAlarms');
+      return ok ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.canScheduleExactAlarms', e, st);
+      return false;
+    }
+  }
+
+  Future<bool> openExactAlarmSettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final ok = await _device.invokeMethod<bool>('openExactAlarmSettings');
+      return ok ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.openExactAlarmSettings', e, st);
+      return false;
+    }
+  }
+
+  /// Device Owner only: clear strict kiosk policies so other apps remain usable (classroom mode).
+  Future<bool> prepareManagedClassroomMode() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final ok = await _device.invokeMethod<bool>('prepareManagedClassroomMode');
+      return ok ?? false;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.prepareManagedClassroomMode', e, st);
+      return false;
+    }
+  }
+
   /// Persist API base URL + device JWT for native FCM fallback (overlay when Flutter is dead).
   Future<void> syncPushContextForNative({
     required String apiBaseUrl,
@@ -374,6 +432,7 @@ class DeviceService {
     int durationSec = 10,
     double opacity = 0.9,
     int? scheduleEndsAtEpochMs,
+    bool alarmPresentation = false,
   }) async {
     if (!Platform.isAndroid) return false;
     try {
@@ -386,7 +445,8 @@ class DeviceService {
           'untilDismissed': untilDismissed,
           'durationSec': durationSec,
           'opacity': opacity,
-          'scheduleEndsAtEpochMs': scheduleEndsAtEpochMs,
+          if (alarmPresentation) 'alarmPresentation': true,
+          'scheduleEndsAtEpochMs': scheduleEndsAtEpochMs ?? 0,
         },
       );
       return ok ?? false;

@@ -12,9 +12,14 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.Executors
 
 object VertiPushCommandHandler {
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val ioExecutor =
+        Executors.newFixedThreadPool(2) { r ->
+            Thread(r, "VertiPushFetch").apply { isDaemon = true }
+        }
     private const val TAG = "VertiSignageBG"
     private const val CONTEXT_STALE_MS = 6 * 60 * 60 * 1000L
 
@@ -47,17 +52,21 @@ object VertiPushCommandHandler {
         val (apiBase, bearer, deviceId) = PushContextStore.read(context)
         val contextAgeMs = PushContextStore.ageMs(context)
         if (contextAgeMs > CONTEXT_STALE_MS) {
-            logFailure("stale_push_context", "announcementId=$announcementId ageMs=$contextAgeMs")
+            logFailure(context, "stale_push_context", "announcementId=$announcementId ageMs=$contextAgeMs")
             RecoveryScheduler.enqueueNow(context, "push_context_stale:$announcementId")
         }
         if (apiBase.isNullOrBlank() || bearer.isNullOrBlank() || deviceId.isNullOrBlank()) {
-            logFailure("missing_push_context", "announcementId=$announcementId")
+            logFailure(context, "missing_push_context", "announcementId=$announcementId")
             RecoveryScheduler.enqueueNow(context, "push_missing_context:$announcementId")
+            ForegroundWakePolicy.syncPresentationState(context.applicationContext, true)
+            FleetTelemetry.log(context.applicationContext, "push_missing_context_wake", announcementId)
             CommandRelay.wakeApp(context)
             return false
         }
-        Thread {
+        ioExecutor.execute {
             try {
+                ForegroundWakePolicy.syncPresentationState(context.applicationContext, true)
+                FleetTelemetry.log(context.applicationContext, "push_fetch_start", announcementId)
                 val url =
                     URL("$apiBase/api/devices/$deviceId/announcement-push/$announcementId")
                 val conn = url.openConnection() as HttpURLConnection
@@ -76,22 +85,29 @@ object VertiPushCommandHandler {
                 val body = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
                 conn.disconnect()
                 val root = JSONObject(body)
-                val envelope = root.optJSONObject("data") ?: return@Thread
+                val envelope = root.optJSONObject("data") ?: return@execute
                 val consumed = maybeShowAnnouncementEnvelope(context.applicationContext, envelope)
                 if (!consumed) {
-                    logFailure("fetch_payload_invalid", "announcementId=$announcementId")
+                    logFailure(context.applicationContext, "fetch_payload_invalid", "announcementId=$announcementId")
+                    FleetTelemetry.log(context.applicationContext, "push_fetch_invalid_envelope", announcementId)
                     RecoveryScheduler.enqueueNow(context, "push_payload_invalid:$announcementId")
                     CommandRelay.wakeApp(context)
                 }
             } catch (t: Exception) {
                 logFailure(
+                    context.applicationContext,
                     "fetch_failed",
                     "announcementId=$announcementId ${t::class.java.simpleName}:${t.message}",
+                )
+                FleetTelemetry.log(
+                    context.applicationContext,
+                    "push_fetch_exception",
+                    "${t::class.java.simpleName}:${t.message}",
                 )
                 RecoveryScheduler.enqueueNow(context, "push_fetch_failed:$announcementId")
                 CommandRelay.wakeApp(context)
             }
-        }.start()
+        }
         return true
     }
 
@@ -158,10 +174,13 @@ object VertiPushCommandHandler {
             payload.optString("mediaKind").trim().ifBlank { null }
 
         mainHandler.post {
+            ForegroundWakePolicy.syncPresentationState(context.applicationContext, true)
+            FleetTelemetry.log(context.applicationContext, "push_announcement_overlay", announcementId)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
                 !Settings.canDrawOverlays(context)
             ) {
-                logFailure("overlay_permission_missing", "announcementId=$announcementId")
+                logFailure(context, "overlay_permission_missing", "announcementId=$announcementId")
+                FleetTelemetry.log(context.applicationContext, "push_overlay_denied", announcementId)
                 RecoveryScheduler.enqueueNow(context, "overlay_permission_missing:$announcementId")
                 CommandRelay.wakeApp(context)
                 return@post
@@ -175,11 +194,12 @@ object VertiPushCommandHandler {
                 mediaKind = mediaKind,
                 untilDismissed = untilDismissed,
                 durationSec = durationSec,
-                opacity = 0.9,
+                opacity = 1.0,
                 scheduleEndEpochMs = scheduleEndEpochMs,
+                alarmPresentation = true,
             )
             if (!shown) {
-                logFailure("overlay_start_failed", "announcementId=$announcementId wakeOk=$wakeOk")
+                logFailure(context, "overlay_start_failed", "announcementId=$announcementId wakeOk=$wakeOk")
                 RecoveryScheduler.enqueueNow(context, "overlay_start_failed:$announcementId")
                 CommandRelay.wakeApp(context)
             }
@@ -187,10 +207,11 @@ object VertiPushCommandHandler {
         return true
     }
 
-    private fun logFailure(reason: String, msg: String) {
+    private fun logFailure(context: Context, reason: String, msg: String) {
         Log.w(
             TAG,
             "event=push_takeover_failure source=VertiPushCommandHandler reason=$reason api=${Build.VERSION.SDK_INT} manufacturer=${Build.MANUFACTURER ?: "unknown"} msg=$msg",
         )
+        FleetTelemetry.log(context.applicationContext, "push_takeover_failure", "$reason $msg")
     }
 }

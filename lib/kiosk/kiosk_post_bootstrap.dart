@@ -79,8 +79,12 @@ abstract final class KioskPostBootstrap {
 
     sl<ForegroundPresentationCoordinator>().start();
 
+    final owner = await device.isDeviceOwner();
+    if (owner && !env.kioskLockTask) {
+      final cleared = await device.prepareManagedClassroomMode();
+      KioskLog.d('Kiosk', 'managedClassroomPolicies=$cleared');
+    }
     if (env.kioskLockTask && tokenStore.hasPairedDevice) {
-      final owner = await device.isDeviceOwner();
       final ok = owner ? await device.applyKioskPoliciesAndEnter() : false;
       KioskLog.d('Kiosk', 'deviceOwner=$owner lockTask=$ok');
     }

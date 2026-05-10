@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../data/playback_perf_telemetry.dart';
+
 /// Maps playlist `fitMode` strings to [BoxFit] (aligned with admin CMS).
 BoxFit boxFitFromPlaylistMode(String mode) {
   switch (mode.toLowerCase()) {
@@ -93,6 +95,9 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
   bool _firstFrameSeen = false;
   int _restartAttempts = 0;
   DateTime? _playStartedAt;
+  Stopwatch? _profileFromInit;
+  int? _profileInitDoneMs;
+  bool _perfEmitted = false;
 
   static const int _maxDecoderRestarts = 1;
   static const Duration _earlyFailureWindow = Duration(milliseconds: 1800);
@@ -174,11 +179,15 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
 
   Future<void> _init() async {
     _log('init start source=${widget.path ?? widget.networkUri}');
+    _profileFromInit = Stopwatch()..start();
+    _profileInitDoneMs = null;
+    _perfEmitted = false;
     final c = widget.path != null
         ? VideoPlayerController.file(File(widget.path!))
         : VideoPlayerController.networkUrl(widget.networkUri!);
     try {
       await c.initialize();
+      _profileInitDoneMs = _profileFromInit?.elapsedMilliseconds;
       if (!mounted) {
         await c.dispose();
         return;
@@ -218,6 +227,7 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
     if (!_firstFrameSeen && v.position > const Duration(milliseconds: 50)) {
       _firstFrameSeen = true;
       _log('first frame at ${v.position.inMilliseconds}ms');
+      _emitPerfOnce();
     }
 
     final elapsedEnough = _playStartedAt != null &&
@@ -229,6 +239,19 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
       );
       _finish(hadError: false);
     }
+  }
+
+  void _emitPerfOnce() {
+    if (_perfEmitted) return;
+    final sw = _profileFromInit;
+    final initMs = _profileInitDoneMs;
+    if (sw == null || initMs == null) return;
+    _perfEmitted = true;
+    PlaybackPerfTelemetry.videoLayerInit(
+      initMs: initMs,
+      firstFrameMs: sw.elapsedMilliseconds,
+      networkSource: widget.networkUri != null,
+    );
   }
 
   Future<void> _retryOrFinishOnError() async {
@@ -265,6 +288,16 @@ class _VideoSlideLayerState extends State<VideoSlideLayer>
   void _finish({required bool hadError}) {
     if (_notified) return;
     _notified = true;
+    if (!_perfEmitted &&
+        _profileInitDoneMs != null &&
+        _profileFromInit != null) {
+      _perfEmitted = true;
+      PlaybackPerfTelemetry.videoLayerInit(
+        initMs: _profileInitDoneMs!,
+        firstFrameMs: _profileFromInit!.elapsedMilliseconds,
+        networkSource: widget.networkUri != null,
+      );
+    }
     final c = _controller;
     if (c != null) {
       c.removeListener(_onTick);

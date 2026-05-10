@@ -67,3 +67,20 @@ object ForegroundWakePolicy {
     fun userBackdropActive(context: Context): Boolean =
         prefs(context.applicationContext).getLong(KEY_USER_BACKDROP_SINCE_MS, 0L) > 0L
 }
+
+/**
+ * When native recovery work runs for these reasons, pre-sync presentation intent so
+ * [ForegroundWakeGuard] does not suppress legitimate push or schedule-driven foregrounding.
+ */
+object PresentationRecoveryHints {
+    fun shouldForceForeground(reason: String): Boolean {
+        val r = reason.lowercase()
+        if (r.contains("push")) return true
+        if (r.contains("overlay")) return true
+        if (r.contains("announcement")) return true
+        if (r.contains("schedule_exact")) return true
+        if (r.contains("schedule_boundary")) return true
+        if (r.contains("native_crash")) return true
+        return false
+    }
+}

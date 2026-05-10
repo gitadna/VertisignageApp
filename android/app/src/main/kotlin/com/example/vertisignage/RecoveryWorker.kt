@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.example.vertisignage.BuildConfig
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -31,6 +32,10 @@ class RecoveryWorker(
                 .apply()
             log("worker_skip", "first_launch_not_completed reason=$reason", Log.WARN)
             return Result.success()
+        }
+
+        if (PresentationRecoveryHints.shouldForceForeground(reason)) {
+            ForegroundWakePolicy.syncPresentationState(applicationContext, true)
         }
 
         try {
@@ -85,7 +90,12 @@ class RecoveryWorker(
         when (level) {
             Log.WARN -> Log.w(TAG, out)
             Log.ERROR -> Log.e(TAG, out)
-            else -> Log.i(TAG, out)
+            else ->
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, out)
+                } else {
+                    /* Routine worker logs omitted outside debug builds */
+                }
         }
     }
 

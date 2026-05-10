@@ -66,6 +66,7 @@ object CommandRelay {
         durationSec: Int,
         opacity: Double,
         scheduleEndEpochMs: Long = 0L,
+        alarmPresentation: Boolean = false,
     ): Boolean {
         return try {
             val intent = Intent(context, OverlayWindowService::class.java).apply {
@@ -77,6 +78,7 @@ object CommandRelay {
                 putExtra(OverlayWindowService.EXTRA_DURATION_SEC, durationSec)
                 putExtra(OverlayWindowService.EXTRA_OPACITY, opacity)
                 putExtra(OverlayWindowService.EXTRA_SCHEDULE_END_EPOCH_MS, scheduleEndEpochMs)
+                putExtra(OverlayWindowService.EXTRA_ALARM_PRESENTATION, alarmPresentation)
             }
             ContextCompat.startForegroundService(context, intent)
             true

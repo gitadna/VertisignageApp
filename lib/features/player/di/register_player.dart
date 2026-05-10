@@ -65,6 +65,7 @@ void registerPlayerModule(GetIt getIt) {
       tokenStore: getIt<TokenStore>(),
       heartbeat: getIt<DeviceHeartbeatService>(),
       device: getIt<DeviceService>(),
+      env: getIt<EnvironmentConfig>(),
       telemetry: getIt<PlayerTelemetry>(),
       enqueueRecoveryOnScheduleBoundary: getIt<EnvironmentConfig>().kioskLockTask,
     ),

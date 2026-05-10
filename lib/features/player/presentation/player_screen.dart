@@ -335,55 +335,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     );
                   },
                 ),
-                if (_overlayVisible)
-                  Align(
-                    alignment: Alignment.bottomCenter,
-                    child: ValueListenableBuilder<bool>(
-                      valueListenable: widget.controller.userPaused,
-                      builder: (context, paused, _) {
-                        return PlayerKioskOverlay(
-                          isPaused: paused,
-                          onInteract: _onOverlayInteraction,
-                          onPlayPause: widget.controller.togglePause,
-                          onPrevious: () =>
-                              unawaited(widget.controller.goToPrevious()),
-                          onNext: () => unawaited(widget.controller.goToNext()),
-                          onClearCache: () => unawaited(
-                            _confirmAndRun(
-                              title: 'Clear cached media?',
-                              body:
-                                  'Downloaded images and videos will be removed. '
-                                  'Content will re-fetch on the next sync.',
-                              confirmLabel: 'Clear',
-                              run: _clearCache,
-                            ),
-                          ),
-                          onRepair: () => unawaited(
-                            _confirmAndRun(
-                              title: 'Pair this device again?',
-                              body:
-                                  'The device unlinks from the current account. '
-                                  'You will enter a new pairing code.',
-                              confirmLabel: 'Continue',
-                              run: _pairAgain,
-                            ),
-                          ),
-                          onResetApp: () => unawaited(
-                            _confirmAndRun(
-                              title: 'Reset application?',
-                              body:
-                                  'Clears cache, ends this session, and restarts '
-                                  'the app when supported. You can pair again afterward.',
-                              confirmLabel: 'Reset',
-                              run: _resetApp,
-                            ),
-                          ),
-                          onStartupDiagnostics: () =>
-                              unawaited(_showStartupDiagnostics()),
-                        );
-                      },
-                    ),
-                  ),
               ],
             ),
           ),

@@ -33,6 +33,15 @@ class VoiceBroadcastCoordinator {
   bool _started = false;
   bool _joinInFlight = false;
 
+  /// REST fallback when Socket.IO is healthy (invites should cover most cases).
+  static const Duration _pollIntervalConnected = Duration(seconds: 22);
+
+  /// Back off active-stream polling when signaling is down to avoid API hammering.
+  static const Duration _pollIntervalDisconnected = Duration(seconds: 90);
+
+  /// After a successful socket connection, reconcile with the backend soon.
+  static const Duration _pollAfterSocketConnected = Duration(seconds: 8);
+
   void start() {
     if (_started) return;
     _started = true;
@@ -42,16 +51,40 @@ class VoiceBroadcastCoordinator {
     });
     _connectedSub = _signaling.connected.listen((_) async {
       KioskLog.event('voice_signal', 'socket_connected_triggering_active_stream_check');
+      _schedulePollSoon();
       await _fallbackJoinFromActiveStream(source: 'socket_connected');
     });
     _stopSub = _signaling.stops.listen((_) async {
       await _leaveAndRestoreApp();
       KioskLog.event('voice_signal', 'voice_stream_stopped');
     });
-    _fallbackPollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      await _fallbackJoinFromActiveStream(source: 'periodic_poll');
-    });
+    _restartAdaptivePollChain();
     _sync();
+  }
+
+  void _restartAdaptivePollChain() {
+    _fallbackPollTimer?.cancel();
+    _fallbackPollTimer = Timer(Duration.zero, () {
+      unawaited(_pollTick());
+    });
+  }
+
+  void _schedulePollSoon() {
+    if (!_started) return;
+    _fallbackPollTimer?.cancel();
+    _fallbackPollTimer = Timer(_pollAfterSocketConnected, () {
+      unawaited(_pollTick());
+    });
+  }
+
+  Future<void> _pollTick() async {
+    if (!_started) return;
+    await _fallbackJoinFromActiveStream(source: 'periodic_poll');
+    if (!_started) return;
+    final next = _signaling.isSocketConnected ? _pollIntervalConnected : _pollIntervalDisconnected;
+    _fallbackPollTimer = Timer(next, () {
+      unawaited(_pollTick());
+    });
   }
 
   void _sync() {

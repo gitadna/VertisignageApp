@@ -90,8 +90,7 @@ abstract final class KioskLog {
   }
 
   static void e(String tag, Object error, [StackTrace? stack]) {
-    final st = stack ?? StackTrace.current;
-    _console('error', tag, error.toString(), stack: st);
+    _console('error', tag, error.toString(), stack: stack);
     onLog?.call(tag, error, stack);
     _remoteSink?.call(
       level: 'error',
