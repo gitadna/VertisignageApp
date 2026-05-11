@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_vlc_player/flutter_vlc_player.dart';
 import 'dart:io';
 
+import '../../../../core/logging/kiosk_log.dart';
 import 'kiosk_video_controller.dart';
 
 class VlcKioskController implements KioskVideoController {
@@ -40,6 +41,20 @@ class VlcKioskController implements KioskVideoController {
       }
       return VlcKioskController._(c);
     } catch (e) {
+      final uri = Uri.tryParse(url);
+      KioskLog.event(
+        'player_video',
+        'vlc_init_failed',
+        level: 'warn',
+        meta: <String, Object?>{
+          'src': 'network',
+          'scheme': uri?.scheme ?? 'unknown',
+          'host': uri?.host ?? 'unknown',
+          'looping': looping,
+          'muted': muted,
+          'err': e.runtimeType.toString(),
+        },
+      );
       if (kDebugMode) debugPrint('VlcKioskController init failed: $e');
       return null;
     }
@@ -71,6 +86,17 @@ class VlcKioskController implements KioskVideoController {
       }
       return VlcKioskController._(c);
     } catch (e) {
+      KioskLog.event(
+        'player_video',
+        'vlc_init_failed',
+        level: 'warn',
+        meta: <String, Object?>{
+          'src': 'file',
+          'looping': looping,
+          'muted': muted,
+          'err': e.runtimeType.toString(),
+        },
+      );
       if (kDebugMode) debugPrint('VlcKioskController init failed: $e');
       return null;
     }

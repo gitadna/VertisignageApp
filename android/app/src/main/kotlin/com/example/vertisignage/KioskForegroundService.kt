@@ -93,6 +93,7 @@ class KioskForegroundService : Service() {
                     }
                 }
 
+            val scheduleWake = startSource?.startsWith("schedule_") == true
             if (shouldWake) {
                 val ok = CommandRelay.wakeApp(this)
                 if (!ok) {
@@ -100,15 +101,15 @@ class KioskForegroundService : Service() {
                     RecoveryScheduler.scheduleAlarmFallback(applicationContext, "wake_failed:$action", 15_000L)
                 }
                 log(
-                    event = "wake_app",
+                    event = if (scheduleWake) "schedule_wake_fired" else "wake_app",
                     action = action,
-                    reason = if (ok) "ok" else "failed",
+                    reason = if (ok) "ok source=${startSource ?: "null"}" else "failed source=${startSource ?: "null"}",
                 )
             } else {
                 log(
-                    event = "wake_app_skipped",
+                    event = if (scheduleWake) "schedule_wake_skipped" else "wake_app_skipped",
                     action = action,
-                    reason = "deduped",
+                    reason = "deduped source=${startSource ?: "null"}",
                 )
             }
         }
@@ -145,6 +146,14 @@ class KioskForegroundService : Service() {
     override fun onBind(intent: Intent?) = null
 
     override fun onDestroy() {
+        log(event = "service_destroy", action = null, reason = null, level = Log.WARN)
+        // Best-effort: if OEM kills the service, ensure another recovery path is armed.
+        try {
+            RecoveryScheduler.enqueueNow(applicationContext, "service_destroy")
+            RecoveryScheduler.scheduleAlarmFallback(applicationContext, "service_destroy", 20_000L)
+        } catch (_: Throwable) {
+            // ignore
+        }
         releaseWakeLock()
         super.onDestroy()
     }

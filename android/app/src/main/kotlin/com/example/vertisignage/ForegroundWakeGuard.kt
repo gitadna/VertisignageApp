@@ -31,4 +31,13 @@ object ForegroundWakeGuard {
         }
         return false
     }
+
+    /**
+     * Schedule-boundary wake always overrides relaxed-teacher backdrop gating: scheduled playback
+     * is an explicit operator intent. Kept as an explicit method so the override path is auditable
+     * and so any future tightening (e.g. quiet-hours policy) lives in one place without affecting
+     * [allowRecoveryBringToForeground].
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun allowScheduleBoundaryWake(context: Context): Boolean = true
 }

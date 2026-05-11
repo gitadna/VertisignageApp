@@ -9,7 +9,10 @@ import '../core/config/environment_config.dart';
 import '../core/errors/global_error_handler.dart';
 import '../core/logging/kiosk_log.dart';
 import '../core/recovery/kiosk_recovery_store.dart';
+import '../core/telemetry/fleet_telemetry.dart';
+import '../features/player/data/playlist_sync_service.dart';
 import '../features/player/data/remote_log_uploader.dart';
+import '../features/player/presentation/player_controller.dart';
 import '../features/voice_broadcast/data/voice_broadcast_coordinator.dart';
 import '../services/device_service.dart';
 import '../services/token_store.dart';
@@ -59,6 +62,7 @@ abstract final class KioskPostBootstrap {
     sl<VoiceBroadcastCoordinator>().start();
     KioskLog.event('voice_signal', 'voice_coordinator_started');
     sl<PushRegistrationCoordinator>().start();
+    _wireFirstFrameAfterBoundaryLogger(sl);
 
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
@@ -88,5 +92,32 @@ abstract final class KioskPostBootstrap {
       final ok = owner ? await device.applyKioskPoliciesAndEnter() : false;
       KioskLog.d('Kiosk', 'deviceOwner=$owner lockTask=$ok');
     }
+  }
+
+  /// Emits a [FleetTelemetry] `first_frame_after_boundary` event the first time the player
+  /// surfaces a display state after each new schedule boundary. Read-only listener; no playback
+  /// behavior changes here, this only measures wake-to-render latency for diagnostics.
+  static void _wireFirstFrameAfterBoundaryLogger(GetIt sl) {
+    final player = sl<PlayerController>();
+    final playlistSync = sl<PlaylistSyncService>();
+    DateTime? lastLoggedBoundary;
+    void listener() {
+      final boundary = playlistSync.currentBoundaryUtc;
+      if (boundary == null) return;
+      if (lastLoggedBoundary == boundary) return;
+      if (player.display.value == null) return;
+      final now = DateTime.now().toUtc();
+      if (now.isBefore(boundary)) return;
+      final deltaMs = now.difference(boundary).inMilliseconds;
+      // Cap stale logging — only count frames within ~60s of the boundary.
+      if (deltaMs > 60000) return;
+      lastLoggedBoundary = boundary;
+      FleetTelemetry.event(
+        'playlist_schedule',
+        'first_frame_after_boundary deltaMs=$deltaMs',
+      );
+    }
+
+    player.display.addListener(listener);
   }
 }

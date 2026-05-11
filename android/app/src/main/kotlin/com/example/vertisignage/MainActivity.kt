@@ -62,6 +62,9 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEVICE_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "getHealthSnapshot" -> {
+                        result.success(getHealthSnapshot())
+                    }
                     "setFirstLaunchCompleted" -> {
                         val completed = call.argument<Boolean>("completed") ?: true
                         result.success(setFirstLaunchCompleted(completed))
@@ -189,9 +192,18 @@ class MainActivity : FlutterActivity() {
                     }
                     "schedulePlaylistBoundaryAlarm" -> {
                         val epochMs = (call.argument<Any>("epochMs") as? Number)?.toLong() ?: 0L
+                        val leadMs = (call.argument<Any>("prewarmLeadMs") as? Number)?.toLong()
+                            ?: PlaylistScheduleAlarm.DEFAULT_PREWARM_LEAD_MS
+                        val graceMs = (call.argument<Any>("postcheckGraceMs") as? Number)?.toLong()
+                            ?: PlaylistScheduleAlarm.DEFAULT_POSTCHECK_GRACE_MS
                         result.success(
                             if (epochMs > 0L) {
-                                PlaylistScheduleAlarm.schedule(this, epochMs)
+                                PlaylistScheduleAlarm.schedule(
+                                    this,
+                                    epochMs,
+                                    prewarmLeadMs = leadMs,
+                                    postcheckGraceMs = graceMs,
+                                )
                             } else {
                                 false
                             },
@@ -200,6 +212,15 @@ class MainActivity : FlutterActivity() {
                     "cancelPlaylistBoundaryAlarm" -> {
                         PlaylistScheduleAlarm.cancel(this)
                         result.success(true)
+                    }
+                    "schedulePrewarmDefaults" -> {
+                        result.success(
+                            hashMapOf(
+                                "prewarmLeadMs" to PlaylistScheduleAlarm.DEFAULT_PREWARM_LEAD_MS,
+                                "postcheckGraceMs" to PlaylistScheduleAlarm.DEFAULT_POSTCHECK_GRACE_MS,
+                                "lastScheduledTargetMs" to PlaylistScheduleAlarm.lastScheduledTargetMs(this),
+                            ),
+                        )
                     }
                     "canScheduleExactAlarms" -> {
                         result.success(PlaylistScheduleAlarm.canScheduleExactAlarms(this))
@@ -458,6 +479,51 @@ class MainActivity : FlutterActivity() {
             hashMapOf(
                 "crashed" to false,
                 "reason" to "error:${t::class.java.simpleName}",
+            )
+        }
+    }
+
+    private fun getHealthSnapshot(): HashMap<String, Any?> {
+        return try {
+            val app = applicationContext
+            val bg = bgPrefs()
+            val nowMs = System.currentTimeMillis()
+            val serviceHb = WatchdogState.lastServiceHeartbeatMs(app)
+            val uiHb = WatchdogState.lastUiHeartbeatMs(app)
+            val lastPresentationSync = ForegroundWakePolicy.lastPresentationSyncMs(app)
+            hashMapOf(
+                "nowMs" to nowMs,
+                "api" to Build.VERSION.SDK_INT,
+                "manufacturer" to (Build.MANUFACTURER ?: "unknown"),
+                "model" to (Build.MODEL ?: "unknown"),
+                "boot" to hashMapOf(
+                    "firstLaunchCompleted" to bg.getBoolean(BootReceiver.KEY_FIRST_LAUNCH_COMPLETED, false),
+                    "pendingRecovery" to bg.getBoolean(BootReceiver.KEY_PENDING_BOOT_RECOVERY, false),
+                    "pendingReason" to bg.getString(BootReceiver.KEY_PENDING_BOOT_RECOVERY_REASON, null),
+                ),
+                "watchdog" to hashMapOf(
+                    "lastServiceHeartbeatMs" to serviceHb,
+                    "lastUiHeartbeatMs" to uiHb,
+                    "serviceAgeMs" to if (serviceHb > 0L) (nowMs - serviceHb).coerceAtLeast(0L) else null,
+                    "uiAgeMs" to if (uiHb > 0L) (nowMs - uiHb).coerceAtLeast(0L) else null,
+                ),
+                "foregroundWake" to hashMapOf(
+                    "relaxedTeacherMode" to ForegroundWakePolicy.isRelaxedTeacherMode(app),
+                    "presentationWantsForeground" to ForegroundWakePolicy.presentationWantsForeground(app),
+                    "lastPresentationSyncMs" to lastPresentationSync,
+                    "presentationAgeMs" to if (lastPresentationSync > 0L) (nowMs - lastPresentationSync).coerceAtLeast(0L) else null,
+                    "userBackdropActive" to ForegroundWakePolicy.userBackdropActive(app),
+                    "allowRecoveryBringToForeground" to ForegroundWakeGuard.allowRecoveryBringToForeground(app),
+                ),
+                "permissions" to hashMapOf(
+                    "canDrawOverlays" to canDrawOverlays(),
+                    "ignoringBatteryOptimizations" to isIgnoringBatteryOptimizations(),
+                    "canScheduleExactAlarms" to PlaylistScheduleAlarm.canScheduleExactAlarms(this),
+                ),
+            )
+        } catch (t: Throwable) {
+            hashMapOf(
+                "error" to "${t::class.java.simpleName}:${t.message}",
             )
         }
     }

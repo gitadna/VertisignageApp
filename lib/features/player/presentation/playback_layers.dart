@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../../core/logging/kiosk_log.dart';
 import 'kiosk_video_backend/kiosk_video_view.dart';
 
 /// Maps playlist `fitMode` strings to [BoxFit] (aligned with admin CMS).
@@ -207,6 +208,16 @@ class _WebSlideLayerState extends State<WebSlideLayer> {
     if (!mounted || _successSent || _failSent) return;
     if (_reloadAttempts < _maxReloads) {
       _reloadAttempts++;
+      KioskLog.event(
+        'player_web',
+        'web_slide_reload',
+        level: 'warn',
+        meta: <String, Object?>{
+          'attempt': _reloadAttempts,
+          'host': widget.uri.host,
+          'scheme': widget.uri.scheme,
+        },
+      );
       final c = _controller;
       if (c != null) {
         unawaited(c.reload());
@@ -228,6 +239,16 @@ class _WebSlideLayerState extends State<WebSlideLayer> {
     if (_successSent || _failSent || !mounted) return;
     _failSent = true;
     _watchdog?.cancel();
+    KioskLog.event(
+      'player_web',
+      'web_slide_failed',
+      level: 'warn',
+      meta: <String, Object?>{
+        'host': widget.uri.host,
+        'scheme': widget.uri.scheme,
+        'reloads': _reloadAttempts,
+      },
+    );
     widget.onLoadFailed();
   }
 

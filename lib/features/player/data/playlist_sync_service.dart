@@ -69,6 +69,18 @@ class PlaylistSyncService extends ChangeNotifier {
   int _backoffAttempt = 0;
   String? _lastSyncError;
   bool _serverPlaylistEmpty = false;
+  DateTime? _currentBoundaryUtc;
+
+  /// Pre-warm lead window (ms) for the native exact alarm chain. Matches the architectural
+  /// guarantee that the activity has a foreground head-start before the boundary commit fires.
+  static const int _schedulePrewarmLeadMs = 10000;
+
+  /// Grace window (ms) after the boundary used by the native postcheck phase to verify the UI
+  /// actually came forward; if stale, native escalates to restartApp.
+  static const int _schedulePostcheckGraceMs = 3000;
+
+  /// Most recent UTC boundary armed (read-only diagnostic surface for higher layers).
+  DateTime? get currentBoundaryUtc => _currentBoundaryUtc;
 
   /// True while a playlist fetch / prefetch round trip is in flight.
   bool get isSyncing => _syncRunning;
@@ -163,6 +175,16 @@ class PlaylistSyncService extends ChangeNotifier {
 
   Future<void> _maybeBoundaryMinimize() async {
     if (kIsWeb || !Platform.isAndroid || _env.kioskLockTask) return;
+    // Start-of-schedule boundaries flip [_active] non-empty before this runs (forceCommit happens
+    // before the `finally` block). Minimizing now would push the activity to the background at the
+    // exact moment we just woke it. Only minimize when there is genuinely nothing to play.
+    if (_active.isNotEmpty) {
+      FleetTelemetry.event(
+        'playlist_schedule',
+        'minimize_skipped_active_nonempty',
+      );
+      return;
+    }
     await _device.hideOverlay();
     await Future<void>.delayed(const Duration(milliseconds: 200));
     final ok = await _device.moveTaskToBack();
@@ -318,6 +340,7 @@ class PlaylistSyncService extends ChangeNotifier {
 
   void _scheduleBoundaryTimer(DateTime? nextBoundaryUtc) {
     _boundaryTimer?.cancel();
+    _currentBoundaryUtc = nextBoundaryUtc;
     if (nextBoundaryUtc == null) {
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
         unawaited(_device.cancelPlaylistBoundaryAlarm());
@@ -329,11 +352,32 @@ class PlaylistSyncService extends ChangeNotifier {
     if (wait.isNegative) wait = Duration.zero;
     const maxWait = Duration(hours: 24);
     if (wait > maxWait) wait = maxWait;
+    FleetTelemetry.event(
+      'playlist_schedule',
+      'boundary_armed targetUtc=${nextBoundaryUtc.toIso8601String()} '
+          'waitMs=${wait.inMilliseconds}',
+    );
     // Schedule edges that were already in the past or are <= 1s away should re-sync immediately AND
     // again ~1s later, in case the server's `nextBoundaryUtc` is slightly ahead of our wall clock or
     // the kiosk lost the previous notification while the schedule lifecycle worker was still mid-tick.
     final isEdge = wait <= const Duration(seconds: 1);
     _boundaryTimer = Timer(wait, () {
+      final firedAt = DateTime.now().toUtc();
+      final driftMs = firedAt.difference(nextBoundaryUtc).inMilliseconds;
+      PlaybackPerfTelemetry.scheduleBoundaryDrift(
+        driftMs: driftMs,
+        waitMs: wait.inMilliseconds,
+        edge: isEdge,
+      );
+      FleetTelemetry.event(
+        'playlist_schedule',
+        'boundary_fired deltaMs=$driftMs waitMs=${wait.inMilliseconds} edge=$isEdge',
+      );
+      // If the boundary is severely late, proactively kick native recovery to compensate for
+      // OEM Doze delays and revive foreground service / alarms.
+      if (driftMs > 15 * 1000) {
+        unawaited(_device.recoveryEnqueueNow('schedule_drift_detected'));
+      }
       if (enqueueRecoveryOnScheduleBoundary) {
         unawaited(_device.recoveryEnqueueNow('schedule_boundary_hit'));
       }
@@ -361,7 +405,11 @@ class PlaylistSyncService extends ChangeNotifier {
 
   Future<void> _scheduleNativePlaylistBoundaryAlarm(int epochMs) async {
     await _device.cancelPlaylistBoundaryAlarm();
-    final ok = await _device.schedulePlaylistBoundaryAlarm(epochMs: epochMs);
+    final ok = await _device.schedulePlaylistBoundaryAlarm(
+      epochMs: epochMs,
+      prewarmLeadMs: _schedulePrewarmLeadMs,
+      postcheckGraceMs: _schedulePostcheckGraceMs,
+    );
     if (!ok) {
       FleetTelemetry.event(
         'playlist_schedule',

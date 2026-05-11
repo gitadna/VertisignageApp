@@ -16,6 +16,18 @@ class DeviceService {
   final MethodChannel _kiosk;
   final MethodChannel _pushBridge;
 
+  /// Diagnostic snapshot of native watchdog state (no side effects).
+  Future<Map<String, dynamic>> getHealthSnapshot() async {
+    if (!Platform.isAndroid) return <String, dynamic>{'unsupported': true};
+    try {
+      final m = await _device.invokeMethod<dynamic>('getHealthSnapshot');
+      if (m is Map) return Map<String, dynamic>.from(m);
+    } catch (e, st) {
+      KioskLog.e('DeviceService.getHealthSnapshot', e, st);
+    }
+    return <String, dynamic>{'error': true};
+  }
+
   /// Enables boot recovery only after first user launch.
   Future<bool> setFirstLaunchCompleted({bool completed = true}) async {
     if (!Platform.isAndroid) return false;
@@ -318,12 +330,25 @@ class DeviceService {
   }
 
   /// Native exact alarm as a belt-and-suspenders complement to the in-process boundary [Timer].
-  Future<bool> schedulePlaylistBoundaryAlarm({required int epochMs}) async {
+  ///
+  /// [prewarmLeadMs] arms an additional prewarm alarm at `target - prewarmLeadMs` so the activity
+  /// can be foregrounded *before* the boundary fires; [postcheckGraceMs] arms a verification alarm
+  /// at `target + postcheckGraceMs` that escalates to a full restart if the UI heartbeat is stale.
+  /// Defaults preserve native-side fallbacks when callers omit them.
+  Future<bool> schedulePlaylistBoundaryAlarm({
+    required int epochMs,
+    int prewarmLeadMs = 10000,
+    int postcheckGraceMs = 3000,
+  }) async {
     if (!Platform.isAndroid) return false;
     try {
       final ok = await _device.invokeMethod<bool>(
         'schedulePlaylistBoundaryAlarm',
-        <String, dynamic>{'epochMs': epochMs},
+        <String, dynamic>{
+          'epochMs': epochMs,
+          'prewarmLeadMs': prewarmLeadMs,
+          'postcheckGraceMs': postcheckGraceMs,
+        },
       );
       return ok ?? false;
     } catch (e, st) {

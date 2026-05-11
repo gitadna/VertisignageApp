@@ -211,7 +211,7 @@ class _KioskVideoViewState extends State<KioskVideoView>
         if (!mounted || _notifiedEnd) return;
         final v = c.raw.value;
         if (v.hasError) {
-          _error = v.errorDescription ?? 'decoder error';
+          _error = v.errorDescription;
           unawaited(sl<KioskVideoPreferences>().setPreferVlcVideo(true));
           return;
         }
@@ -234,7 +234,7 @@ class _KioskVideoViewState extends State<KioskVideoView>
         if (!mounted || _notifiedEnd) return;
         final v = c.raw.value;
         if (v.hasError) {
-          _error = v.errorDescription ?? 'decoder error';
+          _error = v.errorDescription;
           // Switch to VLC next time.
           unawaited(sl<KioskVideoPreferences>().setPreferVlcVideo(true));
           return;

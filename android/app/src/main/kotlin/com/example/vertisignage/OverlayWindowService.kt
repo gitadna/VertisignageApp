@@ -278,12 +278,37 @@ class OverlayWindowService : Service() {
     private fun hideOverlay() {
         autoHide?.let { ui.removeCallbacks(it) }
         autoHide = null
-        overlayVideo?.stopPlayback()
-        overlayWeb?.stopLoading()
-        overlayWeb?.loadUrl("about:blank")
-        overlayWeb?.destroy()
+        try {
+            overlayVideo?.stopPlayback()
+        } catch (_: Throwable) {
+            // ignore
+        }
+
+        val web = overlayWeb
+        if (web != null) {
+            // WebView teardown must be on main thread; some OEMs crash otherwise.
+            ui.post {
+                try {
+                    web.stopLoading()
+                    web.loadUrl("about:blank")
+                    web.destroy()
+                } catch (_: Throwable) {
+                    // ignore
+                }
+            }
+        }
+
         overlayRoot?.let { root ->
-            wm?.removeView(root)
+            try {
+                // removeViewImmediate reduces "leaked window" risk on abrupt stopSelf / process kill.
+                wm?.removeViewImmediate(root)
+            } catch (_: Throwable) {
+                try {
+                    wm?.removeView(root)
+                } catch (_: Throwable) {
+                    // ignore
+                }
+            }
         }
         overlayRoot = null
         overlayText = null
@@ -363,7 +388,13 @@ class OverlayWindowService : Service() {
         text?.visibility = View.GONE
         io.execute {
             try {
-                val bmp = URL(url).openStream().use { BitmapFactory.decodeStream(it) }
+                val opts =
+                    BitmapFactory.Options().apply {
+                        // Lower memory footprint for large signage images; avoids OOM on low-RAM panels.
+                        inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                        inDither = true
+                    }
+                val bmp = URL(url).openStream().use { BitmapFactory.decodeStream(it, null, opts) }
                 ui.post {
                     if (overlayImage != null && bmp != null) {
                         overlayImage?.setImageBitmap(bmp)
@@ -373,7 +404,7 @@ class OverlayWindowService : Service() {
                         hideTextForMedia()
                     }
                 }
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 ui.post {
                     overlayImage?.visibility = View.GONE
                     hideTextForMedia()

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../../../core/logging/kiosk_log.dart';
 import 'kiosk_video_controller.dart';
 
 class VideoPlayerKioskController implements KioskVideoController {
@@ -23,6 +24,17 @@ class VideoPlayerKioskController implements KioskVideoController {
       await c.setVolume(muted ? 0 : 1);
       return VideoPlayerKioskController._(c, looping: looping);
     } catch (e) {
+      KioskLog.event(
+        'player_video',
+        'video_player_init_failed',
+        level: 'warn',
+        meta: <String, Object?>{
+          'src': 'file',
+          'looping': looping,
+          'muted': muted,
+          'err': e.runtimeType.toString(),
+        },
+      );
       if (kDebugMode) debugPrint('VideoPlayerKioskController init failed: $e');
       await c.dispose();
       return null;
@@ -41,6 +53,19 @@ class VideoPlayerKioskController implements KioskVideoController {
       await c.setVolume(muted ? 0 : 1);
       return VideoPlayerKioskController._(c, looping: looping);
     } catch (e) {
+      KioskLog.event(
+        'player_video',
+        'video_player_init_failed',
+        level: 'warn',
+        meta: <String, Object?>{
+          'src': 'network',
+          'scheme': uri.scheme,
+          'host': uri.host,
+          'looping': looping,
+          'muted': muted,
+          'err': e.runtimeType.toString(),
+        },
+      );
       if (kDebugMode) debugPrint('VideoPlayerKioskController init failed: $e');
       await c.dispose();
       return null;

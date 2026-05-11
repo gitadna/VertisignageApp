@@ -117,6 +117,9 @@ object RecoveryScheduler {
         if (lower.startsWith("boot") || lower.contains(":boot")) return true
         if (lower.startsWith("push") || lower.contains(":push")) return true
         if (lower.startsWith("overlay") || lower.contains(":overlay")) return true
+        // Schedule prewarm / exact / postcheck recovery must replace any in-flight stale work so
+        // the new boundary's wake-and-render path takes priority over the previous boundary's tail.
+        if (lower.startsWith("schedule") || lower.contains(":schedule")) return true
         return false
     }
 

@@ -37,6 +37,7 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
   int _androidSdk = 0;
   bool _deviceOwner = false;
   bool _bootRecoveryPending = false;
+  // ignore: unused_field
   String? _bootRecoveryReason;
   bool _firstLaunchCompleted = true;
   bool _showBackgroundRestartPrompt = false;

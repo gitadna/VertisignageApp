@@ -126,7 +126,7 @@ class _WaveBars extends StatelessWidget {
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: anim,
-      builder: (_, __) {
+      builder: (context, child) {
         return Row(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,

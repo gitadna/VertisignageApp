@@ -23,6 +23,7 @@ class WebSocketRealtimeClient implements RealtimeClient {
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
   Timer? _reconnectTimer;
+  Timer? _idleWatchdogTimer;
 
   final _states =
       StreamController<RealtimeConnectionState>.broadcast(sync: true);
@@ -31,6 +32,13 @@ class WebSocketRealtimeClient implements RealtimeClient {
   int _reconnectAttempt = 0;
   bool _userDisconnected = false;
   bool _connectInFlight = false;
+
+  DateTime? _connectedAtUtc;
+  DateTime? _lastMessageAtUtc;
+
+  static const Duration _idleWatchdogTick = Duration(seconds: 30);
+  // If we appear "connected" but receive nothing for too long, assume OEM/network wedged socket.
+  static const Duration _maxConnectedSilence = Duration(minutes: 6);
 
   Uri _buildUri() {
     final base = Uri.parse(_wsBaseUrl);
@@ -75,8 +83,11 @@ class WebSocketRealtimeClient implements RealtimeClient {
     try {
       final uri = _buildUri();
       _channel = WebSocketChannel.connect(uri);
+      _connectedAtUtc = DateTime.now().toUtc();
+      _lastMessageAtUtc = _connectedAtUtc;
       _subscription = _channel!.stream.listen(
         (dynamic data) {
+          _lastMessageAtUtc = DateTime.now().toUtc();
           if (data is String) {
             _messages.add(RealtimeMessage(data));
           } else {
@@ -96,6 +107,7 @@ class WebSocketRealtimeClient implements RealtimeClient {
       _reconnectTimer?.cancel();
       _reconnectTimer = null;
       _reconnectAttempt = 0;
+      _startIdleWatchdog();
       _emit(RealtimeConnectionState.connected);
     } catch (_) {
       _emit(RealtimeConnectionState.reconnecting);
@@ -131,6 +143,8 @@ class WebSocketRealtimeClient implements RealtimeClient {
   @override
   void disconnect() {
     _userDisconnected = true;
+    _idleWatchdogTimer?.cancel();
+    _idleWatchdogTimer = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
 
@@ -144,7 +158,25 @@ class WebSocketRealtimeClient implements RealtimeClient {
     } catch (_) {}
 
     _reconnectAttempt = 0;
+    _connectedAtUtc = null;
+    _lastMessageAtUtc = null;
     _emit(RealtimeConnectionState.disconnected);
+  }
+
+  void _startIdleWatchdog() {
+    _idleWatchdogTimer?.cancel();
+    _idleWatchdogTimer = Timer.periodic(_idleWatchdogTick, (_) {
+      if (_userDisconnected) return;
+      if (!isConnected) return;
+      final last = _lastMessageAtUtc ?? _connectedAtUtc;
+      if (last == null) return;
+      final silentFor = DateTime.now().toUtc().difference(last);
+      if (silentFor < _maxConnectedSilence) return;
+      // Force a reconnect cycle by closing the channel; onDone will schedule reconnect.
+      try {
+        _channel?.sink.close(ws_status.normalClosure);
+      } catch (_) {}
+    });
   }
 
   /// Dispose stream controllers when tearing down the app (tests / hot restart).

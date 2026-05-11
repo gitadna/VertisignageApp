@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart';
 
 /// Minimal transport + lifecycle API shared across video backends.
 abstract class KioskVideoController {

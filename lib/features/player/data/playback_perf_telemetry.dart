@@ -65,4 +65,20 @@ abstract final class PlaybackPerfTelemetry {
       meta: const <String, Object?>{},
     );
   }
+
+  static void scheduleBoundaryDrift({
+    required int driftMs,
+    required int waitMs,
+    required bool edge,
+  }) {
+    KioskLog.event(
+      'playlist_schedule',
+      'boundary_drift',
+      meta: <String, Object?>{
+        'drift_ms': driftMs,
+        'wait_ms': waitMs,
+        'edge': edge,
+      },
+    );
+  }
 }
