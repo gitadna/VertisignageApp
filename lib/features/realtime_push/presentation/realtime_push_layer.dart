@@ -1,10 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
 
 import '../../../core/di/injection.dart';
 import '../../player/presentation/playback_layers.dart';
+import '../../player/presentation/kiosk_video_backend/kiosk_video_view.dart';
 import '../data/realtime_push_notifier.dart';
 
 /// Full-screen takeover for an active realtime content push.
@@ -53,18 +53,16 @@ class _RealtimePushFill extends StatefulWidget {
 }
 
 class _RealtimePushFillState extends State<_RealtimePushFill> {
-  VideoPlayerController? _video;
   bool _videoFailed = false;
   bool _webFailed = false;
   String? _videoError;
+  final ValueNotifier<bool> _paused = ValueNotifier<bool>(false);
 
   @override
   void initState() {
     super.initState();
-    if (widget.state.contentKind == RealtimePushContentKind.video &&
-        (widget.state.mediaUrl?.isNotEmpty ?? false)) {
-      unawaited(_initVideo(widget.state.mediaUrl!));
-    }
+    // Video initialization happens inside [KioskVideoView].
+    _paused.value = widget.state.isPaused;
   }
 
   @override
@@ -77,82 +75,24 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
       _videoFailed = false;
       _webFailed = false;
       _videoError = null;
-      final c = _video;
-      if (c != null) {
-        unawaited(c.dispose());
-        _video = null;
-      }
-      if (widget.state.contentKind == RealtimePushContentKind.video &&
-          (widget.state.mediaUrl?.isNotEmpty ?? false)) {
-        unawaited(_initVideo(widget.state.mediaUrl!));
-      }
     }
 
     if (oldWidget.state.isPaused != widget.state.isPaused &&
         widget.state.contentKind == RealtimePushContentKind.video) {
-      final c = _video;
-      if (c != null && c.value.isInitialized) {
-        if (widget.state.isPaused) {
-          unawaited(c.pause());
-        } else {
-          unawaited(c.play());
-        }
-      }
+      // Handled by [KioskVideoView] via playbackPaused.
+      _paused.value = widget.state.isPaused;
     }
 
     if (!identityChanged &&
         oldWidget.state.restartTick != widget.state.restartTick &&
         widget.state.contentKind == RealtimePushContentKind.video) {
-      final c = _video;
-      if (c != null && c.value.isInitialized) {
-        unawaited(c.seekTo(Duration.zero));
-        unawaited(c.play());
-      }
-    }
-  }
-
-  Future<void> _initVideo(String url) async {
-    final uri = Uri.tryParse(url);
-    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
-      if (mounted) {
-        _videoError = 'Invalid URL: $url';
-        setState(() => _videoFailed = true);
-      }
-      return;
-    }
-    final c = VideoPlayerController.networkUrl(uri);
-    try {
-      await c.initialize();
-      if (!mounted) {
-        await c.dispose();
-        return;
-      }
-      await c.setLooping(true);
-      await c.setVolume(widget.state.muted ? 0.0 : 1.0);
-      _video = c;
-      c.addListener(() {
-        final v = c.value;
-        if (!mounted || _videoFailed) return;
-        if (v.hasError) {
-          _videoError = 'decoder error: ${v.errorDescription ?? 'unknown'}';
-          setState(() => _videoFailed = true);
-        }
-      });
-      setState(() {});
-      await c.play();
-    } catch (e) {
-      await c.dispose();
-      if (mounted) {
-        _videoError = 'init failed: $e';
-        setState(() => _videoFailed = true);
-      }
+      // Restart is handled by rebuilding with a new key.
     }
   }
 
   @override
   void dispose() {
-    final c = _video;
-    if (c != null) unawaited(c.dispose());
+    _paused.dispose();
     super.dispose();
   }
 
@@ -295,33 +235,19 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
     if (url == null || url.isEmpty || _videoFailed) {
       return _buildErrorFallback();
     }
-    final c = _video;
-    if (c == null || !c.value.isInitialized) {
-      return ColoredBox(
-        color: Colors.black,
-        child: Center(
-          child: CircularProgressIndicator(
-            color: Theme.of(context).colorScheme.primary,
-          ),
-        ),
-      );
-    }
-    final sz = c.value.size;
-    final w = sz.width;
-    final h = sz.height;
-    if (w <= 0 || h <= 0) return _buildErrorFallback();
     return _wrapWithCaption(
-      ColoredBox(
-        color: Colors.black,
-        child: FittedBox(
-          fit: _boxFit(),
-          alignment: Alignment.center,
-          child: SizedBox(
-            width: w,
-            height: h,
-            child: VideoPlayer(c),
-          ),
-        ),
+      KioskVideoView(
+        key: ValueKey('push-video-${widget.state.pushId}-${widget.state.restartTick}'),
+        networkUri: Uri.parse(url),
+        fit: _boxFit(),
+        looping: true,
+        muted: widget.state.muted,
+        playbackPaused: _paused,
+        onError: (e) {
+          if (!mounted) return;
+          _videoError = e;
+          setState(() => _videoFailed = true);
+        },
       ),
     );
   }

@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:video_player/video_player.dart';
+import '../presentation/kiosk_video_backend/kiosk_video_controller.dart';
 
 /// Kiosk treats announcements as full-screen media only (image or video URL).
 enum AnnouncementMediaKind {
@@ -35,7 +35,7 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
   int _wallClockDurationSec = 15;
   DateTime? _shownAtUtc;
   DateTime? _presentationEndsAtUtc;
-  VideoPlayerController? _videoController;
+  AnnouncementTransportTarget? _transport;
 
   String? get announcementId => _id;
   AnnouncementMediaKind get mediaKind => _mediaKind;
@@ -88,9 +88,9 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
     _maybeExpiredImmediately();
   }
 
-  /// Bound when overlay plays announcement video (see [_AnnouncementMediaFill]).
-  void bindVideoController(VideoPlayerController? controller) {
-    _videoController = controller;
+  /// Bound when overlay plays announcement media (see `_AnnouncementMediaFill`).
+  void bindTransportTarget(AnnouncementTransportTarget? target) {
+    _transport = target;
   }
 
   void applyTransportCommand({
@@ -99,20 +99,18 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
     double? volume,
   }) {
     if (_id == null || _id != announcementId) return;
-    final v = _videoController;
-    if (v == null || !v.value.isInitialized) return;
+    final t = _transport;
+    if (t == null || !t.isReady) return;
     if (volume != null) {
-      unawaited(v.setVolume(volume.clamp(0.0, 1.0)));
+      unawaited(t.setVolume(volume.clamp(0.0, 1.0)));
     }
     final a = action.toLowerCase();
     if (a == 'pause') {
-      unawaited(v.pause());
+      unawaited(t.pause());
     } else if (a == 'play') {
-      unawaited(v.play());
+      unawaited(t.play());
     } else if (a == 'restart') {
-      unawaited(v.pause());
-      unawaited(v.seekTo(Duration.zero));
-      unawaited(v.play());
+      unawaited(t.restart());
     }
   }
 
@@ -163,7 +161,7 @@ class AnnouncementOverlayNotifier extends ChangeNotifier {
     _wallClockDurationSec = 15;
     _shownAtUtc = null;
     _presentationEndsAtUtc = null;
-    _videoController = null;
+    _transport = null;
 
     final cb = _onDismiss;
     _onDismiss = null;

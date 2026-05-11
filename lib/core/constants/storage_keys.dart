@@ -57,4 +57,7 @@ abstract final class StorageKeys {
   /// Org-level enrollment code last entered on the pairing screen; reused on
   /// recovery so a re-launch never has to re-enter it.
   static const String orgEnrollmentCode = 'org_enrollment_code';
+
+  /// When true, kiosk prefers VLC/FFmpeg playback backend over MediaCodec.
+  static const String preferVlcVideo = 'prefer_vlc_video';
 }

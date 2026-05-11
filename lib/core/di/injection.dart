@@ -11,6 +11,7 @@ import '../websocket/websocket_realtime_client.dart';
 import '../../services/api_service.dart';
 import '../../services/auth_refresher.dart';
 import '../../features/player/data/kiosk_fleet_api.dart';
+import '../../features/player/data/kiosk_video_preferences.dart';
 import '../../features/player/data/ota_update_service.dart';
 import '../../features/player/data/player_telemetry.dart';
 import '../../features/player/data/remote_log_uploader.dart';
@@ -54,6 +55,9 @@ Future<void> configureDependencies() async {
   );
 
   sl.registerLazySingleton<PlayerTelemetry>(PlayerTelemetry.new);
+  sl.registerLazySingleton<KioskVideoPreferences>(
+    () => KioskVideoPreferences(sl<LocalStorage>()),
+  );
 
   sl.registerLazySingleton<KioskFleetApi>(
     () => KioskFleetApi(dio: sl<Dio>(), tokenStore: tokenStore),

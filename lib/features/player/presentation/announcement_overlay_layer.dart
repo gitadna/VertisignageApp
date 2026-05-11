@@ -1,11 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
 
 import '../../../core/di/injection.dart';
 import '../data/announcement_overlay_notifier.dart';
 import 'playback_layers.dart';
+import 'kiosk_video_backend/kiosk_video_view.dart';
 
 /// Full-screen announcement media with optional announcement-text caption below.
 class AnnouncementOverlayLayer extends StatelessWidget {
@@ -67,7 +67,6 @@ class _AnnouncementMediaFill extends StatefulWidget {
 }
 
 class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
-  VideoPlayerController? _video;
   bool _videoFailed = false;
   bool _webFailed = false;
   String? _videoError;
@@ -78,45 +77,12 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     if (widget.kind == AnnouncementMediaKind.video &&
         widget.url != null &&
         widget.url!.isNotEmpty) {
-      unawaited(_initVideo());
+      // Video initialization happens inside [KioskVideoView].
     }
     if (widget.kind == AnnouncementMediaKind.url &&
         widget.url != null &&
         widget.url!.isNotEmpty) {
       // WebView widget is built directly; no async init required here.
-    }
-  }
-
-  Future<void> _initVideo() async {
-    final effectiveUrl = _effectiveUrl(widget.url!);
-    final uri = Uri.tryParse(effectiveUrl);
-    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
-      if (mounted) {
-        _videoError = 'Invalid URL: $effectiveUrl';
-        setState(() => _videoFailed = true);
-      }
-      return;
-    }
-    final c = VideoPlayerController.networkUrl(uri);
-    try {
-      await c.initialize();
-      if (!mounted) {
-        await c.dispose();
-        return;
-      }
-      await c.setLooping(true);
-      await c.setVolume(1);
-      _video = c;
-      sl<AnnouncementOverlayNotifier>().bindVideoController(c);
-      c.addListener(_onVideoTick);
-      setState(() {});
-      await c.play();
-    } catch (e) {
-      await c.dispose();
-      if (mounted) {
-        _videoError = 'init failed: $e';
-        setState(() => _videoFailed = true);
-      }
     }
   }
 
@@ -128,17 +94,10 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     _videoFailed = false;
     _webFailed = false;
     _videoError = null;
-    final c = _video;
-    if (c != null) {
-      sl<AnnouncementOverlayNotifier>().bindVideoController(null);
-      c.removeListener(_onVideoTick);
-      unawaited(c.dispose());
-      _video = null;
-    }
     if (widget.kind == AnnouncementMediaKind.video &&
         widget.url != null &&
         widget.url!.isNotEmpty) {
-      unawaited(_initVideo());
+      // Handled by [KioskVideoView] with a new key.
     }
     if (widget.kind == AnnouncementMediaKind.url &&
         widget.url != null &&
@@ -151,25 +110,9 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     return url;
   }
 
-  void _onVideoTick() {
-    final c = _video;
-    if (c == null || !mounted) return;
-    final v = c.value;
-    if (v.hasError) {
-      c.removeListener(_onVideoTick);
-      _videoError = 'decoder error: ${v.errorDescription ?? 'unknown'}';
-      setState(() => _videoFailed = true);
-    }
-  }
-
   @override
   void dispose() {
-    final c = _video;
-    if (c != null) {
-      sl<AnnouncementOverlayNotifier>().bindVideoController(null);
-      c.removeListener(_onVideoTick);
-      unawaited(c.dispose());
-    }
+    sl<AnnouncementOverlayNotifier>().bindTransportTarget(null);
     super.dispose();
   }
 
@@ -231,40 +174,24 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
         url != null &&
         url.isNotEmpty &&
         !_videoFailed) {
-      final c = _video;
-      if (c != null && c.value.isInitialized) {
-        final sz = c.value.size;
-        final w = sz.width;
-        final h = sz.height;
-        if (w <= 0 || h <= 0) {
-          return _buildTextFallback();
-        }
-        return _mediaColumn(
-          ColoredBox(
-            color: Colors.black,
-            child: FittedBox(
-              fit: BoxFit.contain,
-              alignment: Alignment.center,
-              child: SizedBox(
-                width: w,
-                height: h,
-                child: VideoPlayer(c),
-              ),
-            ),
-          ),
-        );
+      final effectiveUrl = _effectiveUrl(url);
+      final uri = Uri.tryParse(effectiveUrl);
+      if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
+        return _buildTextFallback();
       }
       return _mediaColumn(
-        Stack(
-          fit: StackFit.expand,
-          children: [
-            const ColoredBox(color: Colors.black),
-            Center(
-              child: CircularProgressIndicator(
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-          ],
+        KioskVideoView(
+          key: ValueKey('announce-video-$effectiveUrl'),
+          networkUri: uri,
+          fit: BoxFit.contain,
+          looping: true,
+          muted: false,
+          onControllerReady: (t) => sl<AnnouncementOverlayNotifier>().bindTransportTarget(t),
+          onError: (e) {
+            if (!mounted) return;
+            _videoError = e;
+            setState(() => _videoFailed = true);
+          },
         ),
       );
     }
