@@ -56,6 +56,7 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
   VideoPlayerController? _video;
   bool _videoFailed = false;
   bool _webFailed = false;
+  String? _videoError;
 
   @override
   void initState() {
@@ -75,6 +76,7 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
     if (identityChanged) {
       _videoFailed = false;
       _webFailed = false;
+      _videoError = null;
       final c = _video;
       if (c != null) {
         unawaited(c.dispose());
@@ -112,7 +114,10 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
   Future<void> _initVideo(String url) async {
     final uri = Uri.tryParse(url);
     if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
-      if (mounted) setState(() => _videoFailed = true);
+      if (mounted) {
+        _videoError = 'Invalid URL: $url';
+        setState(() => _videoFailed = true);
+      }
       return;
     }
     final c = VideoPlayerController.networkUrl(uri);
@@ -125,11 +130,22 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
       await c.setLooping(true);
       await c.setVolume(widget.state.muted ? 0.0 : 1.0);
       _video = c;
+      c.addListener(() {
+        final v = c.value;
+        if (!mounted || _videoFailed) return;
+        if (v.hasError) {
+          _videoError = 'decoder error: ${v.errorDescription ?? 'unknown'}';
+          setState(() => _videoFailed = true);
+        }
+      });
       setState(() {});
       await c.play();
-    } catch (_) {
+    } catch (e) {
       await c.dispose();
-      if (mounted) setState(() => _videoFailed = true);
+      if (mounted) {
+        _videoError = 'init failed: $e';
+        setState(() => _videoFailed = true);
+      }
     }
   }
 
@@ -339,6 +355,7 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
     final fallback = (caption != null && caption.isNotEmpty)
         ? caption
         : 'Realtime push';
+    final err = _videoError?.trim();
     return ColoredBox(
       color: Colors.black,
       child: Center(
@@ -351,7 +368,7 @@ class _RealtimePushFillState extends State<_RealtimePushFill> {
                   color: Colors.white70, size: 64),
               const SizedBox(height: 16),
               Text(
-                fallback,
+                (err == null || err.isEmpty) ? fallback : '$fallback\n\n[$err]',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: Colors.white,

@@ -70,6 +70,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
   VideoPlayerController? _video;
   bool _videoFailed = false;
   bool _webFailed = false;
+  String? _videoError;
 
   @override
   void initState() {
@@ -91,6 +92,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     final uri = Uri.tryParse(effectiveUrl);
     if (uri == null || !(uri.isScheme('http') || uri.isScheme('https'))) {
       if (mounted) {
+        _videoError = 'Invalid URL: $effectiveUrl';
         setState(() => _videoFailed = true);
       }
       return;
@@ -109,9 +111,10 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
       c.addListener(_onVideoTick);
       setState(() {});
       await c.play();
-    } catch (_) {
+    } catch (e) {
       await c.dispose();
       if (mounted) {
+        _videoError = 'init failed: $e';
         setState(() => _videoFailed = true);
       }
     }
@@ -124,6 +127,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     if (!sourceChanged) return;
     _videoFailed = false;
     _webFailed = false;
+    _videoError = null;
     final c = _video;
     if (c != null) {
       sl<AnnouncementOverlayNotifier>().bindVideoController(null);
@@ -153,6 +157,7 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
     final v = c.value;
     if (v.hasError) {
       c.removeListener(_onVideoTick);
+      _videoError = 'decoder error: ${v.errorDescription ?? 'unknown'}';
       setState(() => _videoFailed = true);
     }
   }
@@ -325,13 +330,14 @@ class _AnnouncementMediaFillState extends State<_AnnouncementMediaFill> {
 
   Widget _buildTextFallback() {
     final message = _primaryFallbackMessage();
+    final err = _videoError?.trim();
     return ColoredBox(
       color: Colors.black,
       child: Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
           child: Text(
-            message,
+            (err == null || err.isEmpty) ? message : '$message\n\n[$err]',
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: Colors.white,

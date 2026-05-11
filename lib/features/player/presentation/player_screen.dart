@@ -18,7 +18,6 @@ import 'announcement_ticker_layer.dart';
 import 'emergency_overlay_layer.dart';
 import 'playback_layers.dart';
 import 'player_controller.dart';
-import 'player_kiosk_overlay.dart';
 import '../../realtime_push/presentation/realtime_push_layer.dart';
 import '../../voice_broadcast/presentation/voice_takeover_overlay.dart';
 
