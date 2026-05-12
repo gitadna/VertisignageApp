@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 import '../core/logging/kiosk_log.dart';
+import '../core/telemetry/fleet_telemetry.dart';
 
 /// Android/iOS platform hooks for volume, restart, reboot, lock-task (Android).
 /// Failures are swallowed so realtime dispatch never breaks playback.
@@ -26,6 +27,49 @@ class DeviceService {
       KioskLog.e('DeviceService.getHealthSnapshot', e, st);
     }
     return <String, dynamic>{'error': true};
+  }
+
+  /// Module 4: push runtime visibility / player truth to native (throttled in [PresentationRuntimeHeartbeat]).
+  Future<void> reportPresentationRuntimeHeartbeat(
+    Map<String, Object?> payload,
+  ) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _device.invokeMethod<void>(
+        'reportPresentationRuntimeHeartbeat',
+        payload,
+      );
+    } catch (e, st) {
+      KioskLog.e('DeviceService.reportPresentationRuntimeHeartbeat', e, st);
+    }
+  }
+
+  /// Module 4 feature flags in native prefs (kill-switch without reinstall).
+  Future<void> setM4FeatureFlags({
+    bool? m4WatchdogEnabled,
+    bool? m4SurfaceRecoveryEnabled,
+    bool? m4OemProfileEnabled,
+    bool? m4VisibilityEnforcementEnabled,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      final args = <String, dynamic>{};
+      if (m4WatchdogEnabled != null) {
+        args['m4WatchdogEnabled'] = m4WatchdogEnabled;
+      }
+      if (m4SurfaceRecoveryEnabled != null) {
+        args['m4SurfaceRecoveryEnabled'] = m4SurfaceRecoveryEnabled;
+      }
+      if (m4OemProfileEnabled != null) {
+        args['m4OemProfileEnabled'] = m4OemProfileEnabled;
+      }
+      if (m4VisibilityEnforcementEnabled != null) {
+        args['m4VisibilityEnforcementEnabled'] = m4VisibilityEnforcementEnabled;
+      }
+      await _device.invokeMethod<void>('setM4FeatureFlags', args);
+    } catch (e, st) {
+      KioskLog.e('DeviceService.setM4FeatureFlags', e, st);
+    }
   }
 
   /// Enables boot recovery only after first user launch.
@@ -157,11 +201,24 @@ class DeviceService {
   }
 
   /// Relaunch the app via Android launcher intent (same fix as admin “Restart screen”).
+  ///
+  /// Native side may return `false` when the call succeeds but the launch was deliberately
+  /// suppressed by `RecoveryLoopGuard` (restart-storm dampening). The native layer already
+  /// emits `recovery_restart_suppressed` telemetry; we mirror it on the Flutter side so the
+  /// caller's intent ("we asked for a restart, native declined") is visible in remote logs
+  /// alongside the rest of the kiosk event stream.
   Future<bool> restartApplication() async {
     if (!Platform.isAndroid) return false;
     try {
       final ok = await _device.invokeMethod<bool>('restartApp');
-      return ok ?? false;
+      final granted = ok ?? false;
+      if (!granted) {
+        FleetTelemetry.event(
+          'recovery_loop',
+          'restart_request_declined_by_native',
+        );
+      }
+      return granted;
     } catch (e, st) {
       KioskLog.e('DeviceService.restartApp', e, st);
       return false;
@@ -252,6 +309,23 @@ class DeviceService {
       return opened ?? false;
     } catch (e, st) {
       KioskLog.e('DeviceService.openBatteryOptimizationSettings', e, st);
+      return false;
+    }
+  }
+
+  /// Opens Android **App info** for VertiSignage (permissions, battery, notifications, autostart on some OEMs).
+  /// Manual trigger only; returns `false` if the activity cannot be resolved or launch fails.
+  Future<bool> openAppSettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final opened = await _device.invokeMethod<bool>('openAppSettings');
+      final ok = opened ?? false;
+      if (ok) {
+        KioskLog.event('android_settings', 'app_info_opened');
+      }
+      return ok;
+    } catch (e, st) {
+      KioskLog.e('DeviceService.openAppSettings', e, st);
       return false;
     }
   }

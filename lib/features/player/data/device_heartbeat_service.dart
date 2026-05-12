@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -127,6 +128,7 @@ class DeviceHeartbeatService {
       var pending = await _readRetryQueue();
       while (pending.isNotEmpty) {
         final first = pending.first;
+        await _mergeModule4Fields(first);
         if (await _postHeartbeat(device.deviceId, first)) {
           pending.removeAt(0);
           _retryAttempt = 0;
@@ -139,6 +141,7 @@ class DeviceHeartbeatService {
       }
 
       final body = _buildBody();
+      await _mergeModule4Fields(body);
       if (await _postHeartbeat(device.deviceId, body)) {
         _retryAttempt = 0;
         _retryTimer?.cancel();
@@ -172,6 +175,24 @@ class DeviceHeartbeatService {
     body['supportsWakeRelay'] = true;
     body['supportsOverlay'] = true;
     return body;
+  }
+
+  Future<void> _mergeModule4Fields(Map<String, dynamic> body) async {
+    if (!Platform.isAndroid) return;
+    try {
+      final snap = await _device.getHealthSnapshot();
+      final m4 = snap['module4'];
+      if (m4 is! Map) return;
+      body['m4OemProfile'] = m4['oemProfileId'];
+      body['m4LoopRecent'] = m4['loopRecent'];
+      body['m4LoopInWindow'] = m4['loopInWindow'];
+      final wd = m4['watchdog'];
+      if (wd is Map) {
+        body['m4LastStage'] = wd['m4LastStage'];
+        body['m4LastReason'] = wd['m4LastReason'];
+        body['m4UiVisibility'] = wd['uiVisibilityState'];
+      }
+    } catch (_) {}
   }
 
   Future<bool> _postHeartbeat(

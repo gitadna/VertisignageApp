@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../../core/config/environment_config.dart';
+import '../../../core/device/open_android_app_info.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
@@ -211,12 +212,33 @@ class _PlayerScreenState extends State<PlayerScreen> {
             const Text(
               'Tip: On some brands (Xiaomi/Oppo/Vivo/Realme), also allow Auto-start in system settings.',
             ),
+            const SizedBox(height: 12),
+            Text(
+              'If the app does not reopen automatically on your device, allow '
+              'unrestricted battery, autostart, and background activity in Android settings.',
+              style: Theme.of(ctx).textTheme.bodySmall,
+            ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
             child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              final ok = await openAndroidApplicationDetailsSettings(device);
+              if (!mounted) return;
+              if (!ok) {
+                messenger.showSnackBar(
+                  const SnackBar(
+                    content: Text('Could not open Android app settings.'),
+                  ),
+                );
+              }
+            },
+            child: const Text('Manage device permissions'),
           ),
           TextButton(
             onPressed: () async {

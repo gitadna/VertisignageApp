@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../core/telemetry/fleet_telemetry.dart';
 import '../core/websocket/realtime_client.dart';
 import '../features/player/data/realtime_dispatcher.dart';
 import '../services/token_store.dart';
@@ -20,10 +21,25 @@ class FleetRealtimeCoordinator {
   final RealtimeClient _realtime;
 
   bool _listening = false;
+  StreamSubscription<RealtimeConnectionState>? _firstConnectSub;
+  DateTime? _startedAt;
+  bool _firstConnectLogged = false;
 
   void start() {
     if (_listening) return;
     _listening = true;
+    _startedAt = DateTime.now();
+    _firstConnectSub = _realtime.connectionStates.listen((state) {
+      if (_firstConnectLogged) return;
+      if (state != RealtimeConnectionState.connected) return;
+      _firstConnectLogged = true;
+      final elapsed = _startedAt == null
+          ? -1
+          : DateTime.now().difference(_startedAt!).inMilliseconds;
+      FleetTelemetry.event('boot', 'websocket_connected_after_boot elapsedMs=$elapsed');
+      _firstConnectSub?.cancel();
+      _firstConnectSub = null;
+    });
     _tokenStore.addListener(_sync);
     _sync();
   }
@@ -32,6 +48,8 @@ class FleetRealtimeCoordinator {
     if (!_listening) return;
     _listening = false;
     _tokenStore.removeListener(_sync);
+    _firstConnectSub?.cancel();
+    _firstConnectSub = null;
   }
 
   void _sync() {

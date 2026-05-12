@@ -11,6 +11,9 @@ import '../../../kiosk/fleet_realtime_coordinator.dart';
 import '../../../core/websocket/realtime_client.dart';
 import '../../../kiosk/connectivity_coordinator.dart';
 import '../../../kiosk/foreground_presentation_coordinator.dart';
+import '../../../kiosk/presentation_runtime_heartbeat.dart';
+import '../../../kiosk/presentation_session_manager.dart';
+import '../../../kiosk/runtime_mode_coordinator.dart';
 import '../../../services/device_service.dart';
 import '../../../services/token_store.dart';
 import '../data/device_heartbeat_service.dart';
@@ -144,6 +147,15 @@ void registerPlayerModule(GetIt getIt) {
     ),
   );
 
+  getIt.registerLazySingleton<RuntimeModeCoordinator>(
+    () => RuntimeModeCoordinator(
+      playlistSync: getIt<PlaylistSyncService>(),
+      announcement: getIt<AnnouncementOverlayNotifier>(),
+      emergency: getIt<EmergencyOverlayNotifier>(),
+      voicePlayer: getIt<VoiceBroadcastPlayer>(),
+    ),
+  );
+
   getIt.registerLazySingleton<ForegroundPresentationCoordinator>(
     () => ForegroundPresentationCoordinator(
       env: getIt<EnvironmentConfig>(),
@@ -152,6 +164,25 @@ void registerPlayerModule(GetIt getIt) {
       announcement: getIt<AnnouncementOverlayNotifier>(),
       emergency: getIt<EmergencyOverlayNotifier>(),
       voicePlayer: getIt<VoiceBroadcastPlayer>(),
+      runtimeMode: getIt<RuntimeModeCoordinator>(),
+    ),
+  );
+
+  getIt.registerLazySingleton<PresentationSessionManager>(
+    PresentationSessionManager.new,
+  );
+
+  getIt.registerLazySingleton<PresentationRuntimeHeartbeat>(
+    () => PresentationRuntimeHeartbeat(
+      device: getIt<DeviceService>(),
+      player: getIt<PlayerController>(),
+      sync: getIt<PlaylistSyncService>(),
+      telemetry: getIt<PlayerTelemetry>(),
+      announcement: getIt<AnnouncementOverlayNotifier>(),
+      emergency: getIt<EmergencyOverlayNotifier>(),
+      voicePlayer: getIt<VoiceBroadcastPlayer>(),
+      session: getIt<PresentationSessionManager>(),
+      runtimeMode: getIt<RuntimeModeCoordinator>(),
     ),
   );
 

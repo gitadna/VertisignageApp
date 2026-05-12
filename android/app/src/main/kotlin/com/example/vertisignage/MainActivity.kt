@@ -19,6 +19,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -39,8 +40,30 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun provideFlutterEngine(context: Context): FlutterEngine? {
+        val cached = VertiSignageApp.cachedEngine()
+        if (cached != null) {
+            val deltaSinceAppMs = BootTiming.deltaSince(BootTiming.appOnCreateAtMs(applicationContext))
+            FleetTelemetry.log(
+                applicationContext,
+                "activity_engine_cache_hit",
+                "deltaSinceAppOnCreateMs=$deltaSinceAppMs",
+            )
+            return cached
+        }
+        FleetTelemetry.log(applicationContext, "activity_engine_cache_miss")
+        return super.provideFlutterEngine(context)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        BootTiming.markActivityOnCreate(applicationContext)
+        val deltaSinceAppMs = BootTiming.deltaSince(BootTiming.appOnCreateAtMs(applicationContext))
+        FleetTelemetry.log(
+            applicationContext,
+            "activity_oncreate",
+            "deltaSinceAppOnCreateMs=$deltaSinceAppMs",
+        )
         installCrashRestartHandler()
         WatchdogState.markUiHeartbeat(applicationContext)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -58,6 +81,17 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Diagnostics for cached-engine reuse: setMethodCallHandler is idempotent (latest
+        // handler wins), but a soak test with growing attach_count would indicate an unexpected
+        // re-attach cascade. Engine identity hash distinguishes "same cached engine reused"
+        // from "fresh engine created" runs.
+        val attachCount = engineAttachCount.incrementAndGet()
+        val cachedReused = flutterEngine === VertiSignageApp.cachedEngine()
+        FleetTelemetry.log(
+            applicationContext,
+            "engine_configure",
+            "attachCount=$attachCount cached=$cachedReused engineId=${System.identityHashCode(flutterEngine)}",
+        )
         policyManager = DeviceOwnerPolicyManager(this)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEVICE_CHANNEL)
             .setMethodCallHandler { call, result ->
@@ -166,6 +200,9 @@ class MainActivity : FlutterActivity() {
                     "openBatteryOptimizationSettings" -> {
                         result.success(openBatteryOptimizationSettings())
                     }
+                    "openAppSettings" -> {
+                        result.success(openApplicationDetailsSettings())
+                    }
                     "openAutoStartSettings" -> {
                         result.success(openAutoStartSettings())
                     }
@@ -231,6 +268,12 @@ class MainActivity : FlutterActivity() {
                     "prepareManagedClassroomMode" -> {
                         result.success(policyManager.applyManagedClassroomPolicies())
                     }
+                    "reportPresentationRuntimeHeartbeat" -> {
+                        result.success(reportPresentationRuntimeHeartbeat(call.arguments))
+                    }
+                    "setM4FeatureFlags" -> {
+                        result.success(applyM4FeatureFlags(call.arguments))
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -277,7 +320,42 @@ class MainActivity : FlutterActivity() {
     override fun onPostResume() {
         super.onPostResume()
         hideSystemUi()
+        BootTiming.markActivityPostResume(applicationContext)
+        val deltaSinceActivityMs = BootTiming.deltaSince(BootTiming.activityOnCreateAtMs(applicationContext))
+        val deltaSinceAppMs = BootTiming.deltaSince(BootTiming.appOnCreateAtMs(applicationContext))
+        FleetTelemetry.log(
+            applicationContext,
+            "activity_postresume",
+            "deltaSinceActivityOnCreateMs=$deltaSinceActivityMs deltaSinceAppOnCreateMs=$deltaSinceAppMs",
+        )
         WatchdogState.markUiHeartbeat(applicationContext)
+        try {
+            val nowMs = System.currentTimeMillis()
+            val vis = RecoveryAttemptTracker.consumeIfAwaitingVisible(applicationContext, nowMs)
+            if (vis != null) {
+                val (attemptId, dt) = vis
+                val triggerSource = RecoveryTriggerTaxonomy.classify("activity_visible")
+                RecoveryAnalyticsEmitter.emitRecoveryCompleted(
+                    applicationContext,
+                    attemptId,
+                    triggerSource,
+                    "wakeApp",
+                    RecoveryAnalyticsEmitter.RESULT_SUCCESS,
+                    timeToVisibleMs = dt,
+                    timeToBackgroundRuntimeMs = null,
+                    legacyReason = "activity_postresume",
+                )
+                RecoveryAnalyticsEmitter.emitAdminTimeline(
+                    applicationContext,
+                    "foreground_success",
+                    mapOf(
+                        "recovery_attempt_id" to attemptId,
+                        "time_to_visible_ms" to dt,
+                    ),
+                )
+            }
+        } catch (_: Throwable) {
+        }
         enforceKioskIfDeviceOwner()
         RecoveryScheduler.enqueueNow(applicationContext, "activity_post_resume")
     }
@@ -352,8 +430,35 @@ class MainActivity : FlutterActivity() {
      *
      * Do not call [Runtime.exit] here: it tears down the VM immediately so the new
      * task often never comes up — looks like "app closes but does not restart" on device and emulator.
+     *
+     * Gated by [RecoveryLoopGuard]: when the device is clearly stuck in a restart cycle we skip
+     * the aggressive `CLEAR_TASK` activity launch and instead let the existing recovery layer
+     * (FGS + WorkManager + alarms) bring the app back at a safer cadence. This dampens
+     * restart-storm pathologies on OEM firmware without removing any recovery capability.
      */
     private fun restartApp(): Boolean {
+        if (RecoveryLoopGuard.shouldThrottleAggressiveRelaunch(applicationContext, RESTART_PATH)) {
+            RecoveryLoopGuard.onAggressiveRelaunchSuppressed(
+                context = applicationContext,
+                path = RESTART_PATH,
+                softDelayMs = RecoveryLoopGuard.SOFT_FALLBACK_DELAY_MS,
+            )
+            // Keep the recovery layer alive: enqueue a WM run and arm a soft alarm fallback.
+            try {
+                RecoveryScheduler.enqueueNow(
+                    applicationContext,
+                    "restart_loop_soft:restartApp",
+                )
+                RecoveryScheduler.scheduleAlarmFallback(
+                    applicationContext,
+                    "restart_loop_soft:restartApp",
+                    RecoveryLoopGuard.SOFT_FALLBACK_DELAY_MS,
+                )
+            } catch (_: Throwable) {
+                // Soft path is best-effort; native recovery worker remains running regardless.
+            }
+            return false
+        }
         return try {
             val intent = packageManager.getLaunchIntentForPackage(packageName)
                 ?: Intent(this, MainActivity::class.java)
@@ -402,6 +507,15 @@ class MainActivity : FlutterActivity() {
         private const val PUSH_BRIDGE_CHANNEL = "vertisignage/push_bridge"
         private const val TAG = "VertiSignageBG"
         private val CRASH_HANDLER_INSTALLED = AtomicBoolean(false)
+
+        /** Process-wide counter for [configureFlutterEngine] invocations; soak diagnostics only. */
+        private val engineAttachCount = AtomicInteger(0)
+
+        /** Path label used by [RecoveryLoopGuard] telemetry for the method-channel restart. */
+        private const val RESTART_PATH = "restartApp"
+
+        /** Path label used by [RecoveryLoopGuard] for the crash-handler activity relaunch. */
+        const val CRASH_RESTART_PATH = "native_crash_activity_alarm"
     }
 
     private fun bgPrefs(): android.content.SharedPreferences {
@@ -424,6 +538,7 @@ class MainActivity : FlutterActivity() {
                     RecoveryScheduler.enqueueNow(applicationContext, "first_launch_completed_pending_boot")
                 }
                 RecoveryScheduler.ensurePeriodic(applicationContext, "first_launch_completed")
+                PresentationRecoveryCoordinator.ensureWatchdogArmed(applicationContext)
             }
             true
         } catch (t: Throwable) {
@@ -483,6 +598,71 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun reportPresentationRuntimeHeartbeat(raw: Any?): Boolean {
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            val m = raw as? Map<String, Any?> ?: return false
+            val nowMs = (m["nowMs"] as? Number)?.toLong() ?: System.currentTimeMillis()
+            WatchdogState.applyFlutterRuntimeHeartbeat(
+                context = applicationContext,
+                nowMs = nowMs,
+                route = m["route"] as? String,
+                playlistId = m["playlistId"] as? String,
+                playbackState = m["playbackState"] as? String,
+                playerFrameMs = (m["playerFrameMs"] as? Number)?.toLong(),
+                playbackEpoch = (m["playbackEpoch"] as? Number)?.toLong(),
+                currentContentId = m["currentContentId"] as? String,
+                appLifecycle = m["appLifecycle"] as? String,
+                presentationRequiresVisibility = m["presentationRequiresVisibility"] as? Boolean,
+                sessionId = m["sessionId"] as? String,
+                playlistGeneration = (m["playlistGeneration"] as? Number)?.toLong(),
+                playbackGeneration = (m["playbackGeneration"] as? Number)?.toLong(),
+                lastSuccessfulRenderMs = (m["lastSuccessfulRenderMs"] as? Number)?.toLong(),
+                uiVisibilityState = m["uiVisibilityState"] as? String,
+            )
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "event=m4_heartbeat_apply_failed msg=${t::class.java.simpleName}:${t.message}")
+            false
+        }
+    }
+
+    private fun applyM4FeatureFlags(raw: Any?): Boolean {
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            val m = raw as? Map<String, Any?> ?: return false
+            WatchdogState.setM4FeatureFlags(
+                applicationContext,
+                watchdog = m["m4WatchdogEnabled"] as? Boolean,
+                surfaceRecovery = m["m4SurfaceRecoveryEnabled"] as? Boolean,
+                oemProfile = m["m4OemProfileEnabled"] as? Boolean,
+                visibilityEnforcement = m["m4VisibilityEnforcementEnabled"] as? Boolean,
+            )
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "event=m4_flags_failed msg=${t::class.java.simpleName}:${t.message}")
+            false
+        }
+    }
+
+    private fun buildModule4HealthMap(app: Context, nowMs: Long): HashMap<String, Any?> {
+        val out = HashMap<String, Any?>()
+        try {
+            out["watchdog"] = HashMap(WatchdogState.module4Snapshot(app))
+            out["ownership"] = HashMap(ForegroundOwnershipState.ownerSnapshot(app))
+            out["oemProfileId"] = if (WatchdogState.m4OemProfileEnabled(app)) {
+                OemRecoveryProfile.current().id
+            } else {
+                "disabled"
+            }
+            out["loopRecent"] = RecoveryLoopGuard.recentCount(app)
+            out["loopInWindow"] = RecoveryLoopGuard.inLoop(app)
+        } catch (t: Throwable) {
+            out["error"] = "${t::class.java.simpleName}:${t.message}"
+        }
+        return out
+    }
+
     private fun getHealthSnapshot(): HashMap<String, Any?> {
         return try {
             val app = applicationContext
@@ -520,6 +700,7 @@ class MainActivity : FlutterActivity() {
                     "ignoringBatteryOptimizations" to isIgnoringBatteryOptimizations(),
                     "canScheduleExactAlarms" to PlaylistScheduleAlarm.canScheduleExactAlarms(this),
                 ),
+                "module4" to buildModule4HealthMap(app, nowMs),
             )
         } catch (t: Throwable) {
             hashMapOf(
@@ -556,6 +737,35 @@ class MainActivity : FlutterActivity() {
         }
     } catch (_: Exception) {
         false
+    }
+
+    /**
+     * Opens the system App info screen for this package (permissions, battery, notifications).
+     * Manual installer path for OEM panels where deep links are unreliable.
+     */
+    private fun openApplicationDetailsSettings(): Boolean {
+        val app = applicationContext
+        FleetTelemetry.log(app, "app_settings_open_requested", null)
+        return try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:${app.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (intent.resolveActivity(app.packageManager) == null) {
+                FleetTelemetry.log(app, "app_settings_open_failed", "resolveActivity=null")
+                return false
+            }
+            app.startActivity(intent)
+            FleetTelemetry.log(app, "app_settings_open_success", null)
+            true
+        } catch (t: Throwable) {
+            FleetTelemetry.log(
+                app,
+                "app_settings_open_failed",
+                "${t::class.java.simpleName}:${t.message}",
+            )
+            false
+        }
     }
 
     private fun openAutoStartSettings(): Boolean {
@@ -667,23 +877,39 @@ class MainActivity : FlutterActivity() {
             try {
                 val reason = "${throwable::class.java.simpleName}:${throwable.message}"
                 WatchdogState.recordNativeCrash(appContext, reason)
+                // Crash recording, WM enqueue and alarm fallback are NEVER suppressed — only the
+                // activity-relaunch PendingIntent below is gated by [RecoveryLoopGuard] so we
+                // don't fuel a crash → relaunch → crash storm on unstable OEM firmware.
                 RecoveryScheduler.enqueueNow(appContext, "native_crash")
                 RecoveryScheduler.scheduleAlarmFallback(appContext, "native_crash", 3_000L)
-                val am = appContext.getSystemService(AlarmManager::class.java)
-                val launch = Intent(appContext, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                }
-                val pi = PendingIntent.getActivity(
-                    appContext,
-                    29991,
-                    launch,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    am?.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 2_000L, pi)
+                if (RecoveryLoopGuard.shouldThrottleAggressiveRelaunch(
+                        appContext,
+                        CRASH_RESTART_PATH,
+                    )
+                ) {
+                    RecoveryLoopGuard.onAggressiveRelaunchSuppressed(
+                        context = appContext,
+                        path = CRASH_RESTART_PATH,
+                        softDelayMs = 0L,
+                        extraDetail = "reason=$reason",
+                    )
                 } else {
-                    @Suppress("DEPRECATION")
-                    am?.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 2_000L, pi)
+                    val am = appContext.getSystemService(AlarmManager::class.java)
+                    val launch = Intent(appContext, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    val pi = PendingIntent.getActivity(
+                        appContext,
+                        29991,
+                        launch,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        am?.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 2_000L, pi)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        am?.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 2_000L, pi)
+                    }
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "event=crash_handler_failed source=MainActivity msg=${t::class.java.simpleName}:${t.message}")

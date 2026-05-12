@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import androidx.core.content.ContextCompat
 
 class BootReceiver : BroadcastReceiver() {
@@ -27,6 +28,9 @@ class BootReceiver : BroadcastReceiver() {
         if (nowMs - lastHandledAt in 0..RECEIVER_DEDUPE_WINDOW_MS) return
         prefs.edit().putLong(KEY_LAST_BOOT_EVENT_AT_MS, nowMs).apply()
 
+        BootTiming.markBootReceived(storageContext)
+        FleetTelemetry.log(storageContext, "boot_received", "action=$action")
+
         // Do not auto-start anything until the user has launched the app at least once after install.
         val firstLaunchCompleted = prefs.getBoolean(KEY_FIRST_LAUNCH_COMPLETED, false)
         if (!firstLaunchCompleted) {
@@ -40,17 +44,30 @@ class BootReceiver : BroadcastReceiver() {
 
         RecoveryScheduler.ensurePeriodic(storageContext, "boot:$action")
         RecoveryScheduler.enqueueNow(storageContext, "boot:$action")
-        RecoveryScheduler.scheduleAlarmFallback(storageContext, "boot:$action", 20_000L)
+        // Layered fallback chain for OEMs that throttle boot work: each window arms an
+        // independent RecoveryAlarmReceiver pending so a single missed wake cannot strand the app.
+        RecoveryScheduler.scheduleBootStaggeredFallbacks(storageContext, "boot:$action")
 
         try {
+            // Single FGS start that both pins the service AND routes a BAL-safe activity wake on
+            // Android 12+. We deliberately do NOT call CommandRelay.wakeApp directly from a boot
+            // receiver context anymore — the system blocks receiver-driven startActivity on most
+            // post-S devices, so the FGS ACTION_WAKE path inside KioskForegroundService.onStartCommand
+            // is now the canonical wake-up route.
+            val bootAction = action
+            val attemptId = RecoveryAnalyticsEmitter.newAttemptId()
             val serviceIntent = Intent(context, KioskForegroundService::class.java).apply {
+                this.action = KioskForegroundService.ACTION_WAKE
                 putExtra(EXTRA_START_SOURCE, START_SOURCE_BOOT)
-                putExtra(EXTRA_BOOT_ACTION, action)
+                putExtra(EXTRA_BOOT_ACTION, bootAction)
+                putExtra(RecoveryAnalyticsEmitter.EXTRA_RECOVERY_ATTEMPT_ID, attemptId)
             }
             ContextCompat.startForegroundService(context, serviceIntent)
-            CommandRelay.wakeApp(context)
-        } catch (_: Throwable) {
-            // Fail safe: the system/OEM may block background/FGS start; recovery worker will act as fallback.
+            BootTiming.markBootFgsStarted(storageContext)
+            FleetTelemetry.log(storageContext, "boot_fgs_started", "action=$action")
+        } catch (t: Throwable) {
+            // Fail safe: the system/OEM may block background/FGS start; staggered alarms still cover us.
+            Log.w(TAG, "event=boot_fgs_start_blocked source=BootReceiver action=$action msg=${t::class.java.simpleName}:${t.message}")
             prefs.edit()
                 .putBoolean(KEY_PENDING_BOOT_RECOVERY, true)
                 .putString(KEY_PENDING_BOOT_RECOVERY_REASON, "fgs_start_blocked:$action")
@@ -62,6 +79,7 @@ class BootReceiver : BroadcastReceiver() {
 
     companion object {
         private const val PREFS_NAME = "vertisignage_bg"
+        private const val TAG = "VertiSignageBG"
 
         // Written by Flutter (via MainActivity bridge) only after first successful app launch.
         const val KEY_FIRST_LAUNCH_COMPLETED = "first_launch_completed"

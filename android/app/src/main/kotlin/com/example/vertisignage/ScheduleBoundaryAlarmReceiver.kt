@@ -40,7 +40,7 @@ class ScheduleBoundaryAlarmReceiver : BroadcastReceiver() {
     private fun handlePrewarm(app: Context, deltaMs: Long) {
         ForegroundWakePolicy.syncPresentationState(app, true)
         RecoveryScheduler.enqueueNow(app, "schedule_prewarm")
-        startWakeForegroundService(app, "schedule_prewarm")
+        startWakeForegroundService(app, "schedule_prewarm", forceUiWake = false)
         FleetTelemetry.log(app, "schedule_prewarm_fired", "deltaMs=$deltaMs")
     }
 
@@ -49,7 +49,7 @@ class ScheduleBoundaryAlarmReceiver : BroadcastReceiver() {
         // compatibility with the prior single-phase behavior.
         ForegroundWakePolicy.syncPresentationState(app, true)
         RecoveryScheduler.enqueueNow(app, "schedule_exact_boundary")
-        startWakeForegroundService(app, "schedule_exact_boundary")
+        startWakeForegroundService(app, "schedule_exact_boundary", forceUiWake = true)
         // Schedule-boundary wake always overrides ForegroundWakeGuard relaxed-teacher gating.
         if (ForegroundWakeGuard.allowScheduleBoundaryWake(app)) {
             val ok = CommandRelay.wakeApp(app)
@@ -78,6 +78,31 @@ class ScheduleBoundaryAlarmReceiver : BroadcastReceiver() {
                 val wakeOk = CommandRelay.wakeApp(app)
                 if (wakeOk) {
                     "wake"
+                } else if (RecoveryLoopGuard.shouldThrottleAggressiveRelaunch(
+                        app,
+                        POSTCHECK_PATH,
+                    )
+                ) {
+                    // Hard activity relaunch suppressed: keep the schedule recovery chain alive
+                    // via FGS ACTION_WAKE + WM enqueue + alarm fallback. ForegroundWakePolicy
+                    // + enqueueNow above already ran, so schedule eval still progresses.
+                    RecoveryLoopGuard.onAggressiveRelaunchSuppressed(
+                        context = app,
+                        path = POSTCHECK_PATH,
+                        softDelayMs = RecoveryLoopGuard.SOFT_FALLBACK_DELAY_MS,
+                        extraDetail = "uiFresh=false wakeOk=false",
+                    )
+                    startWakeForegroundService(app, "schedule_postcheck_loop_soft", forceUiWake = true)
+                    try {
+                        RecoveryScheduler.scheduleAlarmFallback(
+                            app,
+                            "restart_loop_soft:schedule_postcheck",
+                            RecoveryLoopGuard.SOFT_FALLBACK_DELAY_MS,
+                        )
+                    } catch (_: Throwable) {
+                        // Soft path best-effort; staggered fallbacks remain armed elsewhere.
+                    }
+                    "loop_soft"
                 } else {
                     val restartOk = restartApplication(app)
                     if (restartOk) "restart" else "restart_failed"
@@ -90,11 +115,12 @@ class ScheduleBoundaryAlarmReceiver : BroadcastReceiver() {
         )
     }
 
-    private fun startWakeForegroundService(app: Context, source: String) {
+    private fun startWakeForegroundService(app: Context, source: String, forceUiWake: Boolean) {
         try {
             val svc = Intent(app, KioskForegroundService::class.java).apply {
                 action = KioskForegroundService.ACTION_WAKE
                 putExtra(BootReceiver.EXTRA_START_SOURCE, source)
+                putExtra(RecoveryWakeRouter.EXTRA_FORCE_UI_WAKE, forceUiWake)
             }
             ContextCompat.startForegroundService(app, svc)
         } catch (t: Throwable) {
@@ -131,5 +157,8 @@ class ScheduleBoundaryAlarmReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "VertiSignageBG"
+
+        /** Path label used by [RecoveryLoopGuard] for the schedule postcheck relaunch. */
+        private const val POSTCHECK_PATH = "schedule_postcheck"
     }
 }

@@ -19,12 +19,16 @@ import '../services/token_store.dart';
 import 'connectivity_coordinator.dart';
 import 'fleet_realtime_coordinator.dart';
 import 'foreground_presentation_coordinator.dart';
+import 'presentation_runtime_heartbeat.dart';
 import 'push_registration_coordinator.dart';
+import 'recovery_analytics_from_native.dart';
+import 'runtime_mode_coordinator.dart';
 
-/// Post-DI kiosk wiring: global errors, immersive chrome, connectivity, foreground, lock task.
+/// Post-DI kiosk wiring, split into critical (pre-first-frame) and deferred (post-first-frame).
 abstract final class KioskPostBootstrap {
   static bool _notificationDeniedLogged = false;
-  static bool _configured = false;
+  static bool _criticalConfigured = false;
+  static bool _deferredConfigured = false;
 
   static Future<void> _maybeLogNotificationDeniedOnce() async {
     if (_notificationDeniedLogged) return;
@@ -43,28 +47,88 @@ abstract final class KioskPostBootstrap {
     }
   }
 
-  static Future<void> configure(GetIt sl) async {
-    if (_configured) {
-      KioskLog.d('Kiosk', 'post-bootstrap already configured; skipping duplicate wiring');
+  /// Critical wiring: only the lightweight bits required before the player surface can render.
+  ///
+  /// Must NOT start websocket, push, OTA, connectivity, voice, or foreground coordinators —
+  /// those live in [configureDeferred]. Failures here must not block the UI: catch and log.
+  static Future<void> configureCritical(GetIt sl) async {
+    if (_criticalConfigured) {
+      KioskLog.d('Kiosk', 'post-bootstrap critical already configured; skipping');
       return;
     }
-    _configured = true;
-    sl<KioskRecoveryStore>().restoreGateFromDisk();
-    final crashMarker = await sl<DeviceService>().consumeNativeCrashMarker();
-    if (crashMarker['crashed'] == true) {
-      await sl<KioskRecoveryStore>().recordCrashMarker();
+    _criticalConfigured = true;
+
+    try {
+      sl<KioskRecoveryStore>().restoreGateFromDisk();
+    } catch (e) {
+      KioskLog.w('Kiosk', 'restoreGateFromDisk failed', e);
     }
-    await sl<RemoteLogUploader>().restoreFromDisk();
-    KioskLog.bindRemoteSink(sl<RemoteLogUploader>().enqueue);
+    try {
+      final crashMarker = await sl<DeviceService>().consumeNativeCrashMarker();
+      if (crashMarker['crashed'] == true) {
+        await sl<KioskRecoveryStore>().recordCrashMarker();
+      }
+    } catch (e) {
+      KioskLog.w('Kiosk', 'consumeNativeCrashMarker failed', e);
+    }
+
     GlobalErrorHandler.install();
 
-    sl<FleetRealtimeCoordinator>().start();
-    sl<VoiceBroadcastCoordinator>().start();
-    KioskLog.event('voice_signal', 'voice_coordinator_started');
-    sl<PushRegistrationCoordinator>().start();
-    _wireFirstFrameAfterBoundaryLogger(sl);
+    try {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } catch (e) {
+      KioskLog.w('Kiosk', 'setEnabledSystemUIMode failed', e);
+    }
+  }
 
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  /// Deferred wiring: heavy I/O coordinators, websocket, push, OTA, connectivity, foreground.
+  ///
+  /// Idempotent; safe to call multiple times. Designed to run after the first frame paints so
+  /// the splash dismisses immediately. Per-step exceptions are caught so a partial failure
+  /// never blocks UI; the GlobalErrorHandler still records them.
+  static Future<void> configureDeferred(GetIt sl) async {
+    if (_deferredConfigured) {
+      KioskLog.d('Kiosk', 'post-bootstrap deferred already configured; skipping');
+      return;
+    }
+    _deferredConfigured = true;
+
+    try {
+      await sl<RemoteLogUploader>().restoreFromDisk();
+      KioskLog.bindRemoteSink(sl<RemoteLogUploader>().enqueue);
+    } catch (e) {
+      KioskLog.w('Kiosk', 'RemoteLogUploader wiring failed', e);
+    }
+
+    try {
+      RecoveryAnalyticsFromNative.start();
+      RecoveryAnalyticsFromNative.onEvent = (message, meta) {
+        sl<RuntimeModeCoordinator>().onNativeRecoveryAnalytics(message, meta);
+      };
+      sl<RuntimeModeCoordinator>().start();
+    } catch (e) {
+      KioskLog.w('Kiosk', 'RecoveryAnalyticsFromNative.start failed', e);
+    }
+
+    try {
+      sl<FleetRealtimeCoordinator>().start();
+      FleetTelemetry.event('boot', 'websocket_coordinator_started');
+    } catch (e) {
+      KioskLog.w('Kiosk', 'FleetRealtimeCoordinator.start failed', e);
+    }
+    try {
+      sl<VoiceBroadcastCoordinator>().start();
+      KioskLog.event('voice_signal', 'voice_coordinator_started');
+    } catch (e) {
+      KioskLog.w('Kiosk', 'VoiceBroadcastCoordinator.start failed', e);
+    }
+    try {
+      sl<PushRegistrationCoordinator>().start();
+    } catch (e) {
+      KioskLog.w('Kiosk', 'PushRegistrationCoordinator.start failed', e);
+    }
+
+    _wireFirstFrameAfterBoundaryLogger(sl);
 
     if (!Platform.isAndroid) return;
 
@@ -72,26 +136,55 @@ abstract final class KioskPostBootstrap {
     final tokenStore = sl<TokenStore>();
     final device = sl<DeviceService>();
 
-    // Enable boot recovery only after the first successful app launch.
-    await device.setFirstLaunchCompleted(completed: true);
-    await device.recoveryEnsurePeriodic('post_bootstrap');
+    try {
+      await device.setFirstLaunchCompleted(completed: true);
+      await device.recoveryEnsurePeriodic('post_bootstrap');
+    } catch (e) {
+      KioskLog.w('Kiosk', 'first_launch / periodic recovery failed', e);
+    }
 
-    await device.startForegroundNotification();
+    try {
+      await device.startForegroundNotification();
+    } catch (e) {
+      KioskLog.w('Kiosk', 'startForegroundNotification failed', e);
+    }
     await _maybeLogNotificationDeniedOnce();
 
-    await sl<ConnectivityCoordinator>().start();
-
-    sl<ForegroundPresentationCoordinator>().start();
-
-    final owner = await device.isDeviceOwner();
-    if (owner && !env.kioskLockTask) {
-      final cleared = await device.prepareManagedClassroomMode();
-      KioskLog.d('Kiosk', 'managedClassroomPolicies=$cleared');
+    try {
+      await sl<ConnectivityCoordinator>().start();
+    } catch (e) {
+      KioskLog.w('Kiosk', 'ConnectivityCoordinator.start failed', e);
     }
-    if (env.kioskLockTask && tokenStore.hasPairedDevice) {
-      final ok = owner ? await device.applyKioskPoliciesAndEnter() : false;
-      KioskLog.d('Kiosk', 'deviceOwner=$owner lockTask=$ok');
+    try {
+      sl<ForegroundPresentationCoordinator>().start();
+    } catch (e) {
+      KioskLog.w('Kiosk', 'ForegroundPresentationCoordinator.start failed', e);
     }
+    try {
+      sl<PresentationRuntimeHeartbeat>().start();
+    } catch (e) {
+      KioskLog.w('Kiosk', 'PresentationRuntimeHeartbeat.start failed', e);
+    }
+
+    try {
+      final owner = await device.isDeviceOwner();
+      if (owner && !env.kioskLockTask) {
+        final cleared = await device.prepareManagedClassroomMode();
+        KioskLog.d('Kiosk', 'managedClassroomPolicies=$cleared');
+      }
+      if (env.kioskLockTask && tokenStore.hasPairedDevice) {
+        final ok = owner ? await device.applyKioskPoliciesAndEnter() : false;
+        KioskLog.d('Kiosk', 'deviceOwner=$owner lockTask=$ok');
+      }
+    } catch (e) {
+      KioskLog.w('Kiosk', 'lock task / managed classroom setup failed', e);
+    }
+  }
+
+  /// Backwards-compatible single entrypoint. Internally runs critical then deferred.
+  static Future<void> configure(GetIt sl) async {
+    await configureCritical(sl);
+    await configureDeferred(sl);
   }
 
   /// Emits a [FleetTelemetry] `first_frame_after_boundary` event the first time the player
@@ -109,7 +202,6 @@ abstract final class KioskPostBootstrap {
       final now = DateTime.now().toUtc();
       if (now.isBefore(boundary)) return;
       final deltaMs = now.difference(boundary).inMilliseconds;
-      // Cap stale logging — only count frames within ~60s of the boundary.
       if (deltaMs > 60000) return;
       lastLoggedBoundary = boundary;
       FleetTelemetry.event(

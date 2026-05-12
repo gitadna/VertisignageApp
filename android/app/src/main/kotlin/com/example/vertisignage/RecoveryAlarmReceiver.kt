@@ -10,11 +10,22 @@ class RecoveryAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val reason = intent?.getStringExtra(EXTRA_REASON) ?: "alarm"
         RecoveryScheduler.enqueueNow(context, "alarm:$reason")
+        // Boot-staggered fallbacks must explicitly identify as boot-source so the FGS can log
+        // boot wake deltas via BootTiming and emit boot-prefixed diagnostics.
+        val isBootRecovery = reason.startsWith("boot") || reason.contains(":boot")
+        if (isBootRecovery) {
+            BootTiming.markBootWakeDispatched(context)
+            FleetTelemetry.log(context, "boot_wake_dispatched", "reason=$reason")
+        }
         try {
+            val startSource = if (isBootRecovery) BootReceiver.START_SOURCE_BOOT else START_SOURCE_ALARM
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, KioskForegroundService::class.java).apply {
-                    putExtra(BootReceiver.EXTRA_START_SOURCE, START_SOURCE_ALARM)
+                    // ACTION_WAKE routes the wake through the BAL-safe foreground-service path
+                    // (Android 12+ forbids receiver-driven startActivity in most contexts).
+                    action = KioskForegroundService.ACTION_WAKE
+                    putExtra(BootReceiver.EXTRA_START_SOURCE, startSource)
                     putExtra(RecoveryWorker.EXTRA_RECOVERY_REASON, reason)
                 },
             )

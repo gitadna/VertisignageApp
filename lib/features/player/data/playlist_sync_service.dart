@@ -388,7 +388,7 @@ class PlaylistSyncService extends ChangeNotifier {
         }
         Timer(const Duration(seconds: 1), () {
           if (enqueueRecoveryOnScheduleBoundary) {
-            unawaited(_device.recoveryEnqueueNow('schedule_boundary_retry'));
+            unawaited(_device.recoveryEnqueueNow('schedule_postcheck_playlist_retry'));
           }
           unawaited(sync(forceCommit: true, minimizeAfterBoundary: true));
         });

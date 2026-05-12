@@ -56,7 +56,14 @@ object PlaylistScheduleAlarm {
         val app = context.applicationContext
         val am = app.getSystemService(AlarmManager::class.java) ?: return false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
-            FleetTelemetry.log(app, "schedule_boundary_alarm_skipped", "cannot_schedule_exact")
+            // Permission revoked or never granted (Android 14+ default). Surface this as a
+            // dedicated event so dashboards can flag fleets needing onboarding remediation;
+            // overall schedule recovery still falls back to the in-process Dart timer.
+            FleetTelemetry.log(
+                app,
+                "schedule_boundary_alarm_denied",
+                "reason=cannot_schedule_exact api=${Build.VERSION.SDK_INT}",
+            )
             return false
         }
         val now = System.currentTimeMillis()
@@ -66,6 +73,20 @@ object PlaylistScheduleAlarm {
         val safeGrace = postcheckGraceMs.coerceAtLeast(0L)
         val prewarmAt = maxOf(now + 500L, exactAt - safeLead)
         val postcheckAt = exactAt + safeGrace
+
+        // Rapid re-arm detection: if schedule() ran <1s ago we have a Dart-side burst (e.g.
+        // playlist sync churn). cancel()/UPDATE_CURRENT below already make this safe; the
+        // telemetry exists so soak tests can spot pathological re-arming loops.
+        val prevArmedAt = storagePrefs(app).getLong(KEY_LAST_ARMED_AT_MS, 0L)
+        val prevTargetMs = storagePrefs(app).getLong(KEY_LAST_TARGET_MS, 0L)
+        val sinceLastArmMs = if (prevArmedAt > 0L) now - prevArmedAt else -1L
+        if (sinceLastArmMs in 0..1_000L) {
+            FleetTelemetry.log(
+                app,
+                "schedule_boundary_rearm_burst",
+                "sinceLastArmMs=$sinceLastArmMs prevTargetMs=$prevTargetMs newTargetMs=$exactAt",
+            )
+        }
 
         cancel(app)
         storagePrefs(app).edit()
@@ -126,6 +147,19 @@ object PlaylistScheduleAlarm {
                 am.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pi)
             }
             true
+        } catch (se: SecurityException) {
+            // Android 12+ may revoke SCHEDULE_EXACT_ALARM at runtime — surface as a dedicated
+            // event so the fleet dashboard distinguishes "denied" from "system error".
+            Log.w(
+                TAG,
+                "event=schedule_boundary_alarm_security_denied phase=$phase msg=${se.message}",
+            )
+            FleetTelemetry.log(
+                app,
+                "schedule_boundary_alarm_denied",
+                "phase=$phase reason=security_exception",
+            )
+            false
         } catch (t: Throwable) {
             Log.w(
                 TAG,

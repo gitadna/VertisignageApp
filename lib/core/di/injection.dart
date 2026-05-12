@@ -24,8 +24,18 @@ import '../network/dio_provider.dart';
 
 final GetIt sl = GetIt.instance;
 
-/// Registers app-wide singletons. Call after [Hive.initFlutter] and storage init.
-Future<void> configureDependencies() async {
+bool _criticalRegistered = false;
+bool _deferredRegistered = false;
+
+/// Critical DI: synchronously required to produce a first frame and serve the player surface.
+///
+/// Must stay light: open Hive storage, register token/dio/api, register the small set of
+/// services the player UI may dereference before [configureDeferredDependencies] completes.
+/// Idempotent: safe to call multiple times. Side effects (Hive open) only run once.
+Future<void> configureCriticalDependencies() async {
+  if (_criticalRegistered) return;
+  _criticalRegistered = true;
+
   final env = EnvironmentConfig.fromDartDefines();
   sl.registerSingleton<EnvironmentConfig>(env);
 
@@ -63,17 +73,32 @@ Future<void> configureDependencies() async {
     () => KioskFleetApi(dio: sl<Dio>(), tokenStore: tokenStore),
   );
 
+  sl.registerLazySingleton<DeviceService>(DeviceService.new);
+  sl.registerLazySingleton<DeviceFingerprintService>(
+    () => DeviceFingerprintService(sl<LocalStorage>()),
+  );
+}
+
+/// Deferred DI: heavier services that don't block first frame.
+///
+/// All registrations are still `LazySingleton`s, so they only construct on first access. The
+/// real win is that the corresponding coordinators in [KioskPostBootstrap.configureDeferred]
+/// only `.start()` AFTER the first frame is on screen.
+///
+/// Idempotent: safe to call multiple times.
+Future<void> configureDeferredDependencies() async {
+  if (_deferredRegistered) return;
+  _deferredRegistered = true;
+
+  final env = sl<EnvironmentConfig>();
+  final tokenStore = sl<TokenStore>();
+
   sl.registerLazySingleton<RemoteLogUploader>(
     () => RemoteLogUploader(
       api: sl<KioskFleetApi>(),
       env: env,
       storage: sl<LocalStorage>(),
     ),
-  );
-
-  sl.registerLazySingleton<DeviceService>(DeviceService.new);
-  sl.registerLazySingleton<DeviceFingerprintService>(
-    () => DeviceFingerprintService(sl<LocalStorage>()),
   );
 
   sl.registerLazySingleton<PushRegistrationCoordinator>(
@@ -99,4 +124,11 @@ Future<void> configureDependencies() async {
       tokenStore: tokenStore,
     ),
   );
+}
+
+/// Backwards-compatible wrapper that runs both phases sequentially. Existing call sites that
+/// expect a single `configureDependencies()` continue to work unchanged.
+Future<void> configureDependencies() async {
+  await configureCriticalDependencies();
+  await configureDeferredDependencies();
 }

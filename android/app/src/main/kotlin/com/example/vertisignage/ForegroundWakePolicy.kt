@@ -81,6 +81,8 @@ object PresentationRecoveryHints {
         if (r.contains("schedule_exact")) return true
         if (r.contains("schedule_boundary")) return true
         if (r.contains("native_crash")) return true
+        if (r.contains("watchdog_m4_visibility")) return true
+        if (r.contains("watchdog_m4")) return true
         return false
     }
 }

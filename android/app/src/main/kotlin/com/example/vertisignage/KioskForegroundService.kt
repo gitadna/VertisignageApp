@@ -94,31 +94,139 @@ class KioskForegroundService : Service() {
                 }
 
             val scheduleWake = startSource?.startsWith("schedule_") == true
+            val bootWake = startSource == BootReceiver.START_SOURCE_BOOT
+            val recoveryReason = intent?.getStringExtra(RecoveryWorker.EXTRA_RECOVERY_REASON) ?: "action_wake"
+            var attemptId = intent?.getStringExtra(RecoveryAnalyticsEmitter.EXTRA_RECOVERY_ATTEMPT_ID)
+            if (attemptId.isNullOrBlank()) {
+                attemptId = RecoveryAnalyticsEmitter.newAttemptId()
+            }
+            val forceUiWake = intent?.getBooleanExtra(RecoveryWakeRouter.EXTRA_FORCE_UI_WAKE, false) == true
+            val legacyForTaxonomy = "$recoveryReason source=${startSource ?: "null"}"
+            val triggerSource = RecoveryTriggerTaxonomy.classify(legacyForTaxonomy)
+            RecoveryAnalyticsEmitter.emitRecoveryStarted(
+                this,
+                attemptId,
+                triggerSource,
+                legacyForTaxonomy,
+                "ACTION_WAKE",
+            )
             if (shouldWake) {
-                val ok = CommandRelay.wakeApp(this)
-                if (!ok) {
-                    RecoveryScheduler.enqueueNow(applicationContext, "wake_failed:$action")
-                    RecoveryScheduler.scheduleAlarmFallback(applicationContext, "wake_failed:$action", 15_000L)
+                val shouldBring =
+                    RecoveryWakeRouter.shouldBringActivityToForeground(
+                        this,
+                        forceUiWakeIntent = forceUiWake,
+                        forceWakeUiFromWorker = false,
+                        startSource = startSource,
+                    )
+                if (shouldBring) {
+                    val ok = CommandRelay.wakeApp(this)
+                    if (!ok) {
+                        RecoveryScheduler.enqueueNow(applicationContext, "wake_failed:$action")
+                        RecoveryScheduler.scheduleAlarmFallback(applicationContext, "wake_failed:$action", 15_000L)
+                        RecoveryAnalyticsEmitter.emitRecoveryCompleted(
+                            this,
+                            attemptId,
+                            triggerSource,
+                            "wakeApp",
+                            RecoveryAnalyticsEmitter.RESULT_FAILED,
+                            timeToVisibleMs = null,
+                            timeToBackgroundRuntimeMs = null,
+                            legacyReason = legacyForTaxonomy,
+                        )
+                    } else {
+                        RecoveryAttemptTracker.beginAttempt(
+                            applicationContext,
+                            attemptId,
+                            nowMs,
+                            awaitVisible = true,
+                        )
+                    }
+                    val evt = when {
+                        scheduleWake -> "schedule_wake_fired"
+                        bootWake -> "boot_fgs_action_wake"
+                        else -> "wake_app"
+                    }
+                    log(
+                        event = evt,
+                        action = action,
+                        reason = if (ok) "ok source=${startSource ?: "null"}" else "failed source=${startSource ?: "null"}",
+                    )
+                    if (bootWake) {
+                        val deltaFromBootMs = BootTiming.deltaSince(
+                            BootTiming.bootReceivedAtMs(applicationContext),
+                        )
+                        FleetTelemetry.log(
+                            applicationContext,
+                            "boot_fgs_action_wake",
+                            "ok=$ok deltaSinceBootReceivedMs=$deltaFromBootMs",
+                        )
+                    }
+                } else {
+                    log(
+                        event = "wake_app_skipped_policy",
+                        action = action,
+                        reason = "silent_runtime source=${startSource ?: "null"}",
+                    )
+                    RecoveryAnalyticsEmitter.emitRecoveryCompleted(
+                        this,
+                        attemptId,
+                        triggerSource,
+                        "foreground_service",
+                        RecoveryAnalyticsEmitter.RESULT_SUCCESS,
+                        timeToVisibleMs = null,
+                        timeToBackgroundRuntimeMs = null,
+                        legacyReason = legacyForTaxonomy,
+                        additionalMeta = mapOf("silent_runtime_restore" to true),
+                    )
+                    RecoveryAnalyticsEmitter.emitAdminTimeline(
+                        this,
+                        "returned_to_background",
+                        mapOf(
+                            "recovery_attempt_id" to attemptId,
+                            "note" to "wake_skipped_no_presentation_demand",
+                        ),
+                    )
+                }
+            } else {
+                val evt = when {
+                    scheduleWake -> "schedule_wake_skipped"
+                    bootWake -> "boot_fgs_action_wake_skipped"
+                    else -> "wake_app_skipped"
                 }
                 log(
-                    event = if (scheduleWake) "schedule_wake_fired" else "wake_app",
-                    action = action,
-                    reason = if (ok) "ok source=${startSource ?: "null"}" else "failed source=${startSource ?: "null"}",
-                )
-            } else {
-                log(
-                    event = if (scheduleWake) "schedule_wake_skipped" else "wake_app_skipped",
+                    event = evt,
                     action = action,
                     reason = "deduped source=${startSource ?: "null"}",
+                )
+                RecoveryAnalyticsEmitter.emitRecoveryCompleted(
+                    this,
+                    attemptId,
+                    triggerSource,
+                    "ACTION_WAKE",
+                    RecoveryAnalyticsEmitter.RESULT_SUPPRESSED,
+                    timeToVisibleMs = null,
+                    timeToBackgroundRuntimeMs = null,
+                    legacyReason = "dedupe_window $legacyForTaxonomy",
                 )
             }
         }
         if (forceWakeUi) {
             if (ForegroundWakeGuard.allowRecoveryBringToForeground(this)) {
-                val ok = CommandRelay.wakeApp(this)
-                if (!ok) {
-                    RecoveryScheduler.enqueueNow(applicationContext, "force_wake_failed")
-                    RecoveryScheduler.scheduleAlarmFallback(applicationContext, "force_wake_failed", 15_000L)
+                val bring =
+                    RecoveryWakeRouter.shouldBringActivityToForeground(
+                        this,
+                        forceUiWakeIntent = false,
+                        forceWakeUiFromWorker = true,
+                        startSource = startSource,
+                    )
+                if (bring) {
+                    val ok = CommandRelay.wakeApp(this)
+                    if (!ok) {
+                        RecoveryScheduler.enqueueNow(applicationContext, "force_wake_failed")
+                        RecoveryScheduler.scheduleAlarmFallback(applicationContext, "force_wake_failed", 15_000L)
+                    }
+                } else {
+                    log(event = "force_wake_ui_skipped", action = action, reason = "recovery_wake_router")
                 }
             } else {
                 log(event = "force_wake_ui_skipped", action = action, reason = "foreground_wake_guard")
@@ -129,16 +237,84 @@ class KioskForegroundService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         log(event = "service_task_removed", action = null, reason = null, level = Log.WARN)
+        try {
+            PresentationRecoveryCoordinator.notifyTrigger(applicationContext, "service_task_removed")
+        } catch (_: Throwable) {
+        }
         RecoveryScheduler.enqueueNow(applicationContext, "service_task_removed")
-        val ok =
-            if (ForegroundWakeGuard.allowRecoveryBringToForeground(this)) {
-                CommandRelay.wakeApp(this)
-            } else {
-                log(event = "task_removed_wake_skipped", action = null, reason = "foreground_wake_guard", level = Log.INFO)
-                false
-            }
-        if (!ok) {
+        val attemptId = RecoveryAnalyticsEmitter.newAttemptId()
+        val triggerSource = RecoveryTriggerTaxonomy.classify("service_task_removed")
+        RecoveryAnalyticsEmitter.emitRecoveryStarted(
+            this,
+            attemptId,
+            triggerSource,
+            "service_task_removed",
+            "task_reorder",
+        )
+        val guardOk = ForegroundWakeGuard.allowRecoveryBringToForeground(this)
+        if (!guardOk) {
+            log(event = "task_removed_wake_skipped", action = null, reason = "foreground_wake_guard", level = Log.INFO)
+            RecoveryAnalyticsEmitter.emitRecoveryCompleted(
+                this,
+                attemptId,
+                triggerSource,
+                "foreground_service",
+                RecoveryAnalyticsEmitter.RESULT_SUPPRESSED,
+                timeToVisibleMs = null,
+                timeToBackgroundRuntimeMs = null,
+                legacyReason = "service_task_removed",
+            )
             RecoveryScheduler.scheduleAlarmFallback(applicationContext, "task_removed_wake_failed", 10_000L)
+            super.onTaskRemoved(rootIntent)
+            return
+        }
+        val bring =
+            RecoveryWakeRouter.shouldBringActivityToForeground(
+                this,
+                forceUiWakeIntent = false,
+                forceWakeUiFromWorker = false,
+                startSource = "task_removed",
+            )
+        if (!bring) {
+            log(
+                event = "task_removed_wake_skipped",
+                action = null,
+                reason = "no_presentation_demand",
+                level = Log.INFO,
+            )
+            RecoveryAnalyticsEmitter.emitRecoveryCompleted(
+                this,
+                attemptId,
+                triggerSource,
+                "foreground_service",
+                RecoveryAnalyticsEmitter.RESULT_SUCCESS,
+                timeToVisibleMs = null,
+                timeToBackgroundRuntimeMs = null,
+                legacyReason = "service_task_removed",
+            )
+            super.onTaskRemoved(rootIntent)
+            return
+        }
+        val wakeOk = CommandRelay.wakeApp(this)
+        if (!wakeOk) {
+            RecoveryScheduler.scheduleAlarmFallback(applicationContext, "task_removed_wake_failed", 10_000L)
+            RecoveryAnalyticsEmitter.emitRecoveryCompleted(
+                this,
+                attemptId,
+                triggerSource,
+                "wakeApp",
+                RecoveryAnalyticsEmitter.RESULT_FAILED,
+                timeToVisibleMs = null,
+                timeToBackgroundRuntimeMs = null,
+                legacyReason = "service_task_removed",
+            )
+        } else {
+            RecoveryAttemptTracker.beginAttempt(
+                applicationContext,
+                attemptId,
+                System.currentTimeMillis(),
+                awaitVisible = true,
+            )
         }
         super.onTaskRemoved(rootIntent)
     }

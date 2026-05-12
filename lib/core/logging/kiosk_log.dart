@@ -13,6 +13,13 @@ abstract final class KioskLog {
 
   static KioskRemoteSink? _remoteSink;
 
+  /// Buffers structured events emitted before [bindRemoteSink] has wired a sink (e.g. during
+  /// the critical bootstrap phase, before the deferred phase constructs [RemoteLogUploader]).
+  /// Flushed in-order the moment a sink is attached. Capped to avoid unbounded growth if remote
+  /// shipping never starts (e.g. release build that never authenticates).
+  static const int _pendingEventCap = 256;
+  static final List<_PendingEvent> _pendingEvents = <_PendingEvent>[];
+
   /// Console log filtering.
   ///
   /// Defaults:
@@ -26,9 +33,21 @@ abstract final class KioskLog {
   static const bool _consoleUserLogs =
       bool.fromEnvironment('KIOSK_CONSOLE_USER_LOGS', defaultValue: true);
 
-  /// Wired after DI (Phase 8 fleet logging).
+  /// Wired after DI (Phase 8 fleet logging). When attaching a non-null sink we flush any
+  /// events that were emitted before the sink existed so the boot-timing trail is preserved.
   static void bindRemoteSink(KioskRemoteSink? sink) {
     _remoteSink = sink;
+    if (sink == null || _pendingEvents.isEmpty) return;
+    final pending = List<_PendingEvent>.from(_pendingEvents);
+    _pendingEvents.clear();
+    for (final ev in pending) {
+      sink(
+        level: ev.level,
+        category: ev.category,
+        message: ev.message,
+        meta: ev.meta,
+      );
+    }
   }
 
   static int _levelRank(String level) {
@@ -109,11 +128,37 @@ abstract final class KioskLog {
   }) {
     // NOTE: Intentionally remote-only by default to keep `flutter run` readable.
     // Use [user] / [i] / [w] / [e] for console logs.
-    _remoteSink?.call(
-      level: level,
-      category: category,
-      message: message,
-      meta: meta,
+    final sink = _remoteSink;
+    if (sink != null) {
+      sink(level: level, category: category, message: message, meta: meta);
+      return;
+    }
+    // No sink wired yet (critical bootstrap, very early boot). Buffer for replay when the
+    // deferred phase attaches [RemoteLogUploader.enqueue] via [bindRemoteSink].
+    if (_pendingEvents.length >= _pendingEventCap) {
+      _pendingEvents.removeAt(0);
+    }
+    _pendingEvents.add(
+      _PendingEvent(
+        level: level,
+        category: category,
+        message: message,
+        meta: meta,
+      ),
     );
   }
+}
+
+class _PendingEvent {
+  const _PendingEvent({
+    required this.level,
+    required this.category,
+    required this.message,
+    this.meta,
+  });
+
+  final String level;
+  final String category;
+  final String message;
+  final Map<String, Object?>? meta;
 }

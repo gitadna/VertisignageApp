@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/widgets.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../core/config/environment_config.dart';
@@ -10,6 +11,7 @@ import '../features/player/data/playback_perf_telemetry.dart';
 import '../features/player/data/playlist_sync_service.dart';
 import '../features/voice_broadcast/data/voice_broadcast_player.dart';
 import '../services/device_service.dart';
+import 'runtime_mode_coordinator.dart';
 
 /// Pushes kiosk “should we steal focus?” state to native and optionally backgrounds the task
 /// when scheduled / urgent playback ends.
@@ -27,12 +29,14 @@ class ForegroundPresentationCoordinator {
     required AnnouncementOverlayNotifier announcement,
     required EmergencyOverlayNotifier emergency,
     required VoiceBroadcastPlayer voicePlayer,
+    RuntimeModeCoordinator? runtimeMode,
   })  : _env = env,
         _device = device,
         _playlistSync = playlistSync,
         _announcement = announcement,
         _emergency = emergency,
-        _voicePlayer = voicePlayer;
+        _voicePlayer = voicePlayer,
+        _runtimeMode = runtimeMode;
 
   final EnvironmentConfig _env;
   final DeviceService _device;
@@ -40,9 +44,11 @@ class ForegroundPresentationCoordinator {
   final AnnouncementOverlayNotifier _announcement;
   final EmergencyOverlayNotifier _emergency;
   final VoiceBroadcastPlayer _voicePlayer;
+  final RuntimeModeCoordinator? _runtimeMode;
 
   Timer? _debounce;
   Timer? _minimizeAfterIdleDebounce;
+  Timer? _wakeDemandDebounce;
 
   bool _started = false;
   bool _lastWantsForeground = false;
@@ -82,6 +88,7 @@ class ForegroundPresentationCoordinator {
     final wants = _presentationWantsForeground();
     final prev = _lastWantsForeground;
     _lastWantsForeground = wants;
+    _runtimeMode?.onPresentationDemandEdge(prev: prev, now: wants);
     if (wants) {
       await WakelockPlus.enable();
     } else {
@@ -91,8 +98,30 @@ class ForegroundPresentationCoordinator {
       await _device.syncForegroundPresentationState(
         presentationWantsForeground: wants,
       );
+      _maybeWakeForPresentationDemand(prev: prev, now: wants);
       _maybeDeferToBackground(prev: prev, now: wants);
     }
+  }
+
+  void _maybeWakeForPresentationDemand({
+    required bool prev,
+    required bool now,
+  }) {
+    if (!now || prev) return;
+    final lc = WidgetsBinding.instance.lifecycleState;
+    if (lc == AppLifecycleState.resumed) return;
+    _wakeDemandDebounce?.cancel();
+    _wakeDemandDebounce = Timer(const Duration(milliseconds: 400), () async {
+      _wakeDemandDebounce = null;
+      if (!_presentationWantsForeground()) return;
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        return;
+      }
+      final ok = await _device.wakeAppToForeground();
+      if (ok == true) {
+        _runtimeMode?.onForegroundWakeSucceeded();
+      }
+    });
   }
 
   bool _presentationWantsForeground() {
@@ -119,6 +148,7 @@ class ForegroundPresentationCoordinator {
         if (ok == false) {
           PlaybackPerfTelemetry.moveTaskToBackDenied();
         }
+        _runtimeMode?.onMoveTaskToBackResult(ok: ok);
       }());
     });
   }

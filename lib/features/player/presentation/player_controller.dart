@@ -219,6 +219,16 @@ class PlayerController {
     _cancelTimers();
   }
 
+  /// Module 4: one coalesced sync + re-present current slide (no new PlayerController / websocket).
+  Future<void> recoverPresentationSurface() async {
+    if (!_running) return;
+    if (_playlist.isEmpty) return;
+    try {
+      await _sync.sync();
+    } catch (_) {}
+    await _presentCurrent();
+  }
+
   void _cancelTimers() {
     _slideTimer?.cancel();
     _slideTimer = null;

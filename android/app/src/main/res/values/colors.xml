@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Solid splash background painted by LaunchTheme before Flutter attaches.
+         Kept dark by default for signage panels; values-night overrides where needed. -->
+    <color name="splash_background">#0F1419</color>
+</resources>

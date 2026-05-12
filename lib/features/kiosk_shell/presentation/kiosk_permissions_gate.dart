@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../core/constants/storage_keys.dart';
+import '../../../core/device/open_android_app_info.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/storage/local_storage.dart';
 import '../../../services/device_service.dart';
@@ -493,6 +494,54 @@ class _KioskPermissionsGateState extends State<KioskPermissionsGate>
                         onToggleRecentsLock: (value) {
                           setState(() => _recentsLockConfirmed = value);
                         },
+                      ),
+                      const SizedBox(height: 16),
+                      Card(
+                        margin: EdgeInsets.zero,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text(
+                                'Android app settings',
+                                style: theme.textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'If the app does not reopen automatically on your device, '
+                                'allow unrestricted battery, autostart, and background activity '
+                                'in Android settings.',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              OutlinedButton.icon(
+                                onPressed: () async {
+                                  if (!Platform.isAndroid) return;
+                                  final messenger = ScaffoldMessenger.of(context);
+                                  final ok =
+                                      await openAndroidApplicationDetailsSettings(
+                                    _device,
+                                  );
+                                  if (!mounted) return;
+                                  if (!ok) {
+                                    messenger.showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Could not open Android app settings.',
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                },
+                                icon: const Icon(Icons.settings_outlined, size: 20),
+                                label: const Text('Open Android App Settings'),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                       const SizedBox(height: 24),
                     ],

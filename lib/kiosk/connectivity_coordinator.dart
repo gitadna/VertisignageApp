@@ -41,7 +41,7 @@ class ConnectivityCoordinator {
           });
         } else if (!online) {
           _offlineWatchdog ??= Timer.periodic(const Duration(minutes: 2), (_) {
-            unawaited(_device.recoveryEnqueueNow('offline_watchdog'));
+            unawaited(_device.recoveryEnqueueNow('websocket_offline_watchdog'));
           });
         }
       },
